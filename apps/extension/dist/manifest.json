@@ -14,6 +14,7 @@
   ],
   "host_permissions": [
     "https://helpdesk.phitron.io/*",
+    "https://helpdesk-assistant-extension.vercel.app/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -27,7 +28,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.tsx-C_ICRpdo.js"
+        "assets/index.tsx-3I8npDzg.js"
       ],
       "matches": [
         "https://helpdesk.phitron.io/*"
@@ -41,7 +42,7 @@
         "https://helpdesk.phitron.io/*"
       ],
       "resources": [
-        "assets/index.tsx-C_ICRpdo.js"
+        "assets/index.tsx-3I8npDzg.js"
       ],
       "use_dynamic_url": false
     }
