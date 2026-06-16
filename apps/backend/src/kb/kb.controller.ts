@@ -97,4 +97,9 @@ export class KbController {
   async getStats() {
     return this.kbService.getStats();
   }
+
+  @Get('urls')
+  async getUrls() {
+    return this.kbService.getAllUrls();
+  }
 }

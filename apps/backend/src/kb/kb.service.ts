@@ -304,6 +304,12 @@ export class KbService {
     });
   }
 
+  // Slim list of every saved url — batch agent's skip-set source.
+  async getAllUrls(): Promise<string[]> {
+    const rows = await this.prisma.kbPost.findMany({ select: { url: true } });
+    return rows.map((r) => r.url);
+  }
+
   async getPostById(id: string) {
     return this.prisma.kbPost.findUnique({ where: { id } });
   }
