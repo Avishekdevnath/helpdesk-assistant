@@ -19,7 +19,8 @@ export function buildPrompt(
 ): string {
   const replyStyle = [
     'Reply style:',
-    '- Write in Bangla/Bengali with natural student-friendly English technical terms when useful.',
+    '- Write in Bengali using Bangla script (বাংলা হরফ / Unicode), NOT romanized Banglish. Example: write "আপনি" not "apni", "ধন্যবাদ" not "dhonnobad".',
+    '- Use English only for technical terms (e.g. array, loop, supervisor, assignment) where natural for students.',
     '- Match the Phitron helpdesk tone: warm, concise, simple student-friendly, and practical.',
     '- For simple conceptual posts, answer directly with a small example when it helps.',
     '- Give the complete answer directly in the draft. Do not end with an offer like "চাইলে আমি..." or "let me know". Do not ask follow-up questions.',
@@ -28,7 +29,7 @@ export function buildPrompt(
 
   const exemplars = kb.filter((e) => e.moderatorAnswer);
   const exemplarBlock = exemplars.length
-    ? 'Exemplar replies from real moderators (copy this style and grounding):\n' +
+    ? 'Exemplar replies from real moderators (copy their tone and grounding, but always write your reply in Bengali script — convert any Banglish here to বাংলা হরফ):\n' +
       exemplars.map((e) => `Q: ${e.title}\nModerator answer: ${e.moderatorAnswer}`).join('\n\n')
     : null;
 
