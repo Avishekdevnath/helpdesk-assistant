@@ -11,6 +11,14 @@ interface ScrapPostDto {
   fullContent?: string;
 }
 
+interface FromPostDto {
+  postTitle: string;
+  postBody: string;
+  comment: string;
+  url: string;
+  savedBy?: string;
+}
+
 @Controller('kb')
 export class KbController {
   constructor(private readonly kbService: KbService) {}
@@ -18,6 +26,23 @@ export class KbController {
   @Post('scrape')
   async scrapPost(@Body() data: ScrapPostDto) {
     return this.kbService.scrapPost(data);
+  }
+
+  @Post('from-post')
+  async saveFromPost(@Body() data: FromPostDto) {
+    return this.kbService.scrapPost({
+      title: data.postTitle,
+      body: data.postBody,
+      discussion: data.comment
+        ? [{ role: 'moderator', author: data.savedBy ?? 'moderator', text: data.comment }]
+        : [],
+      url: data.url,
+    });
+  }
+
+  @Get('search')
+  async search(@Query('q') q = '', @Query('limit') limit = '5') {
+    return this.kbService.search(q, parseInt(limit));
   }
 
   @Get('posts')
