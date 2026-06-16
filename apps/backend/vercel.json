@@ -4,16 +4,7 @@
   "buildCommand": "pnpm --filter @helpdesk/shared-types build && prisma generate && nest build",
   "functions": {
     "api/index.ts": {
-      "includeFiles": [
-        "src/generated/prisma/**",
-        "../node_modules/.prisma/helpdesk-client/**",
-        "dist/**",
-        "../packages/shared-types/dist/**",
-        "../node_modules/@prisma/client/**",
-        "../node_modules/@prisma/adapter-neon/**",
-        "../node_modules/@neondatabase/serverless/**",
-        "../node_modules/openai/**"
-      ]
+      "includeFiles": "{src/generated/prisma/**,../node_modules/.prisma/helpdesk-client/**,dist/**,../packages/shared-types/dist/**,../node_modules/@prisma/client/**,../node_modules/@prisma/adapter-neon/**,../node_modules/@neondatabase/serverless/**,../node_modules/openai/**}"
     }
   },
   "rewrites": [
