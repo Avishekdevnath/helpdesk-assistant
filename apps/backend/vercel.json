@@ -2,6 +2,7 @@
   "version": 2,
   "installCommand": "corepack enable && corepack use pnpm@10.32.1 && pnpm install --frozen-lockfile -w",
   "buildCommand": "pnpm --filter @helpdesk/shared-types build && prisma generate && nest build",
+  "outputDirectory": "public",
   "functions": {
     "api/index.ts": {
       "includeFiles": "{src/generated/prisma/**,../node_modules/.prisma/helpdesk-client/**,dist/**,../packages/shared-types/dist/**,../node_modules/@prisma/client/**,../node_modules/@prisma/adapter-neon/**,../node_modules/@neondatabase/serverless/**,../node_modules/openai/**}"
