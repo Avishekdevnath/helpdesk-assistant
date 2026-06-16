@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { Prisma } from '.prisma/helpdesk-client';
@@ -13,6 +13,30 @@ interface ScrapData {
   course?: string;
   batch?: string;
   fullContent?: string;
+}
+
+interface ExtractInput {
+  title: string;
+  body: string;
+  url: string;
+  status?: string;
+  course?: string;
+  batch?: string;
+  discussion: any[]; // { author, role, text, timestamp? }
+  attributes?: Record<string, any>;
+  fullContent?: string;
+  screenshots?: string[]; // dataURLs (vision, Phase 3)
+}
+
+interface Extraction {
+  savable: boolean;
+  question: string;
+  answer: string;
+  summary: string;
+  tags: string[];
+  category: string;
+  confidence: 'high' | 'medium' | 'low';
+  moderatorVoice: string;
 }
 
 export interface KbSearchHit {
@@ -75,6 +99,134 @@ export class KbService {
     }
 
     return { id: saved.id, message: 'Post saved to KB', post: saved };
+  }
+
+  private confidenceToNumber(c: string): number {
+    return c === 'high' ? 0.9 : c === 'medium' ? 0.6 : 0.3;
+  }
+
+  private hasModerator(discussion: any[]): boolean {
+    return (discussion ?? []).some((d) => d?.role === 'moderator' || d?.role === 'admin');
+  }
+
+  // AI reads the full thread (+ optional screenshots) and extracts one reusable Q&A.
+  private async aiExtract(data: ExtractInput): Promise<Extraction> {
+    const thread = (data.discussion ?? [])
+      .map((d) => `[${d.role ?? 'user'}] ${d.author ?? ''}: ${d.text ?? ''}`)
+      .join('\n');
+    const attrs = data.attributes ? JSON.stringify(data.attributes) : '{}';
+
+    const system = [
+      'You curate a helpdesk knowledge base for Phitron (a Bangladeshi edutech).',
+      'Read the full post thread and extract ONE reusable Q&A.',
+      'Rules:',
+      '- answer: write in Bengali using Bangla script (বাংলা হরফ), NOT romanized Banglish. English only for technical terms.',
+      '- answer must come ONLY from the thread (especially the moderator/admin reply). Never invent facts, dates, or schedules.',
+      '- moderatorVoice: the moderator/admin reply text VERBATIM (keep their exact phrasing and tone, even if Banglish).',
+      '- savable=false if there is no real confirmed answer from a moderator/admin.',
+      '- summary: one short line. category: one of assignment | concept | logistics | tooling | account | other.',
+      '- confidence: high if a moderator gave a clear final answer; medium if partial; low if unsure.',
+      'Return ONLY JSON: { savable, question, answer, summary, tags (string[]), category, confidence (high|medium|low), moderatorVoice }.',
+    ].join('\n');
+
+    const user = [
+      `Title: ${data.title}`,
+      `Body: ${data.body}`,
+      `Attributes: ${attrs}`,
+      `Status: ${data.status ?? ''}`,
+      `Thread:\n${thread || '(no comments)'}`,
+    ].join('\n\n');
+
+    const content: any[] = [{ type: 'text', text: user }];
+    for (const url of data.screenshots ?? []) {
+      content.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+    }
+
+    const res = await this.openaiClient.chat.completions.create({
+      model: 'gpt-4o',
+      temperature: 0.2,
+      max_tokens: 1500,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: content as any },
+      ],
+    });
+
+    const text = res.choices?.[0]?.message?.content;
+    if (!text) throw new InternalServerErrorException('AI extract returned no content');
+    const parsed = JSON.parse(text);
+    return {
+      savable: !!parsed.savable,
+      question: String(parsed.question ?? data.title ?? '').trim(),
+      answer: String(parsed.answer ?? '').trim(),
+      summary: String(parsed.summary ?? '').trim(),
+      tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: any) => String(t)).slice(0, 12) : [],
+      category: String(parsed.category ?? 'other').trim(),
+      confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
+      moderatorVoice: String(parsed.moderatorVoice ?? '').trim(),
+    };
+  }
+
+  // Gate -> AI extract -> upsert by url -> embed.
+  async extractAndSave(data: ExtractInput) {
+    const resolved = (data.status ?? '').trim().toLowerCase() === 'resolved';
+    if (!resolved) return { saved: false, reason: 'gate: status is not Resolved' };
+    if (!this.hasModerator(data.discussion)) return { saved: false, reason: 'gate: no moderator/admin reply' };
+
+    const ex = await this.aiExtract(data);
+    if (!ex.savable || !ex.answer) return { saved: false, reason: 'ai: no confirmed answer' };
+
+    const confidence = this.confidenceToNumber(ex.confidence);
+    const embedText = `${ex.question}\n${ex.answer}\n${ex.summary}`;
+
+    const fields = {
+      title: data.title,
+      body: data.body,
+      course: data.course,
+      batch: data.batch,
+      discussion: (data.discussion ?? []) as Prisma.InputJsonValue,
+      rawContent: data.fullContent,
+      status: data.status,
+      moderatorAnswer: ex.answer,
+      moderatorVoice: ex.moderatorVoice,
+      summary: ex.summary,
+      category: ex.category,
+      tags: ex.tags,
+      confidence,
+      metadata: (data.attributes ?? {}) as Prisma.InputJsonValue,
+    };
+
+    const [saved, vec] = await Promise.allSettled([
+      this.prisma.kbPost.upsert({
+        where: { url: data.url },
+        create: { url: data.url, ...fields },
+        update: fields,
+      }),
+      this.embedding.embed(embedText),
+    ]);
+
+    if (saved.status === 'rejected') throw saved.reason;
+    const row = (saved as PromiseFulfilledResult<any>).value;
+
+    if (vec.status === 'fulfilled') {
+      const vector = `[${(vec as PromiseFulfilledResult<number[]>).value.join(',')}]`;
+      await this.prisma.$executeRaw`
+        UPDATE kb_posts SET embedding = ${vector}::vector WHERE id = ${row.id}
+      `;
+    }
+
+    return {
+      saved: true,
+      id: row.id,
+      extraction: {
+        question: ex.question,
+        summary: ex.summary,
+        category: ex.category,
+        tags: ex.tags,
+        confidence: ex.confidence,
+      },
+    };
   }
 
   async vectorSearch(query: string, limit: number): Promise<KbSearchHit[]> {

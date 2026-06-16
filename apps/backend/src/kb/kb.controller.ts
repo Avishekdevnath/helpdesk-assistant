@@ -19,6 +19,19 @@ interface FromPostDto {
   savedBy?: string;
 }
 
+interface ExtractDto {
+  title: string;
+  body: string;
+  url: string;
+  status?: string;
+  course?: string;
+  batch?: string;
+  discussion: Record<string, unknown>[];
+  attributes?: Record<string, unknown>;
+  fullContent?: string;
+  screenshots?: string[];
+}
+
 @Controller('kb')
 export class KbController {
   constructor(private readonly kbService: KbService) {}
@@ -38,6 +51,12 @@ export class KbController {
         : [],
       url: data.url,
     });
+  }
+
+  // AI-curated save: gate -> AI extract -> upsert by url -> embed.
+  @Post('extract')
+  async extract(@Body() data: ExtractDto) {
+    return this.kbService.extractAndSave(data);
   }
 
   @Get('search')
