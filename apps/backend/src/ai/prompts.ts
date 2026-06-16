@@ -26,6 +26,8 @@ export function buildPrompt(
     '- Keep it SHORT: 2-4 sentences. No long explanations, no repetition, no padding.',
     '- For simple conceptual posts, answer directly with a small example when it helps.',
     '- Only state facts present in the KB context. Do NOT guess or invent specifics (dates, schedules, deadlines, results).',
+    '- NEVER reference the knowledge base, KB, internal source, context, or how you know something to the student. Do not write "KB অনুযায়ী", "according to KB", "জানা মতে from KB", etc. Speak as a moderator who simply knows.',
+    '- When stating something from the KB that may have changed (e.g. a planned date), attribute it softly to available info instead, e.g. "এখনো পর্যন্ত পাওয়া তথ্য অনুসারে...".',
     '- If the asked info (e.g. an exact date) is NOT in the KB context, do not make one up. Reply briefly in Bengali that it is not confirmed yet and to watch official announcements, and recommend practicing/revising previous lessons in the meantime.',
     '- Give the complete answer directly in the draft. Do not end with an offer like "চাইলে আমি..." or "let me know". Do not ask follow-up questions.',
     '- Return plain text only. Do not use Markdown, bold markers, headings, bullets, code fences, or decorative formatting.',
@@ -62,7 +64,7 @@ export function buildPrompt(
         exemplarBlock,
         `KB context:\n${kbBlock}`,
         `Post:\n${postBlock}`,
-        'Write a clear, helpful, encouraging reply. Cite KB when relevant.',
+        'Write a clear, helpful, encouraging reply grounded in the KB context, but never mention the KB or your source to the student.',
       ]
         .filter(Boolean)
         .join('\n\n');
