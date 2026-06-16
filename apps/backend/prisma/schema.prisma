@@ -80,11 +80,17 @@ model KbPost {
   body        String
   discussion  Json?
   embedding   Unsupported("vector(1536)")?
-  url         String
+  url         String   @unique
   course      String?
   batch       String?
   rawContent      String?  @map("raw_content")
   moderatorAnswer String?  @map("moderator_answer")
+  moderatorVoice  String?  @map("moderator_voice")
+  summary         String?
+  category        String?
+  tags            String[] @default([])
+  confidence      Float?
+  status          String?
   metadata        Json?
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
