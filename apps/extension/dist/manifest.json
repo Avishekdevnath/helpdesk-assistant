@@ -10,7 +10,8 @@
     "sidePanel",
     "storage",
     "tabs",
-    "activeTab"
+    "activeTab",
+    "downloads"
   ],
   "host_permissions": [
     "https://helpdesk.phitron.io/*",
@@ -28,7 +29,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.tsx-6YcSy9RD.js"
+        "assets/index.tsx-DhXgu9lH.js"
       ],
       "matches": [
         "https://helpdesk.phitron.io/*"
@@ -42,7 +43,7 @@
         "https://helpdesk.phitron.io/*"
       ],
       "resources": [
-        "assets/index.tsx-6YcSy9RD.js"
+        "assets/index.tsx-DhXgu9lH.js"
       ],
       "use_dynamic_url": false
     }
