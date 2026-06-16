@@ -1,0 +1,93 @@
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../../../node_modules/.prisma/helpdesk-client"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum KbSource {
+  manual
+  post_save
+  markdown
+  docx
+  xlsx
+}
+
+enum QuestionType {
+  assignment
+  practice
+}
+
+enum Difficulty {
+  easy
+  medium
+  hard
+}
+
+model KbEntry {
+  id        String    @id @default(uuid())
+  title     String
+  content   String
+  tags      String[]
+  source    KbSource
+  sourceUrl String?   @map("source_url")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+  postSave  PostSave?
+
+  @@index([title])
+  @@map("kb_entries")
+}
+
+model PostSave {
+  id        String   @id @default(uuid())
+  postTitle String   @map("post_title")
+  postBody  String   @map("post_body")
+  comment   String
+  url       String
+  savedBy   String   @map("saved_by")
+  savedAt   DateTime @default(now()) @map("saved_at")
+  kbEntryId String?  @unique @map("kb_entry_id")
+  kbEntry   KbEntry? @relation(fields: [kbEntryId], references: [id], onDelete: SetNull)
+
+  @@map("post_saves")
+}
+
+model QuestionEntry {
+  id           String       @id @default(uuid())
+  type         QuestionType
+  sourceDoc    String       @map("source_doc")
+  batch        String
+  course       String
+  questionNo   String?      @map("question_no")
+  questionText String       @map("question_text")
+  hint1        String
+  hint2        String?
+  topicTags    String[]     @map("topic_tags")
+  difficulty   Difficulty
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  @@index([type])
+  @@map("question_entries")
+}
+
+model KbPost {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  discussion  Json?
+  embedding   Unsupported("vector(1536)")?
+  url         String
+  course      String?
+  batch       String?
+  rawContent      String?  @map("raw_content")
+  moderatorAnswer String?  @map("moderator_answer")
+  metadata        Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("kb_posts")
+}

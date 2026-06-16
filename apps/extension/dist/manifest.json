@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Helpdesk Assistant",
+  "version": "0.0.1",
+  "description": "AI moderator assistant for Phitron helpdesk.",
+  "action": {
+    "default_title": "Open Helpdesk Assistant"
+  },
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://helpdesk.phitron.io/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "assets/index.tsx-C_ICRpdo.js"
+      ],
+      "matches": [
+        "https://helpdesk.phitron.io/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "https://helpdesk.phitron.io/*"
+      ],
+      "resources": [
+        "assets/index.tsx-C_ICRpdo.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ]
+}

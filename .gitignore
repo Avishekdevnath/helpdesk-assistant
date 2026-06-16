@@ -1,0 +1,84 @@
+# Claude Code session data
+.claude/
+
+# Misc leftovers
+package-lock.json
+resource/
+test.html
+
+# Environment & Secrets
+.env
+.env.local
+.env.test
+.env.*.local
+
+# Dependencies
+node_modules/
+node_modules/.prisma/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.orig
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+test-results/
+*.lcov
+
+# Monorepo & Build tools
+.turbo/
+.vercel/
+.vercel/output/
+
+# Documentation & Planning (excluded from repo)
+docs/
+ideation/
+*.md
+!README.md
+!apps/*/README.md
+*.md.local
+
+# Chrome extension source (only ship the build)
+apps/extension/src/
+apps/extension/build/
+!apps/extension/dist/
+!apps/extension/dist/**
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+.prisma/
+
+# Cache
+.cache/
+temp/
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Misc
+.env.d.ts

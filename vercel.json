@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "packageManager": "pnpm@10.32.1",
+  "installCommand": "corepack enable && corepack use pnpm@10.32.1 && pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @helpdesk/shared-types build && pnpm --filter backend prisma generate && pnpm --filter backend build",
+  "builds": [
+    {
+      "src": "apps/backend/api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "apps/backend/src/generated/prisma/**",
+          "node_modules/.prisma/**",
+          "apps/backend/dist/**",
+          "packages/shared-types/dist/**",
+          "node_modules/@prisma/client/**",
+          "node_modules/@prisma/adapter-neon/**",
+          "node_modules/@neondatabase/serverless/**",
+          "node_modules/openai/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "apps/backend/api/index.ts"
+    }
+  ]
+}
