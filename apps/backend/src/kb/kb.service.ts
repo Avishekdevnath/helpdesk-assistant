@@ -44,7 +44,17 @@ export interface KbSearchHit {
   title: string;
   body: string;
   moderatorAnswer: string | null;
+  moderatorVoice?: string | null;
+  summary?: string | null;
+  category?: string | null;
+  confidence?: number | null;
+  similarity?: number;
 }
+
+// Drop vector hits below this cosine similarity — keeps irrelevant KB context
+// out of the prompt so the model says "not confirmed" instead of hallucinating.
+// Kept moderate (not 0.5) because Banglish↔Bengali cross-script pairs score lower.
+const SIMILARITY_THRESHOLD = 0.35;
 
 @Injectable()
 export class KbService {
@@ -178,7 +188,9 @@ export class KbService {
     if (!ex.savable || !ex.answer) return { saved: false, reason: 'ai: no confirmed answer' };
 
     const confidence = this.confidenceToNumber(ex.confidence);
-    const embedText = `${ex.question}\n${ex.answer}\n${ex.summary}`;
+    // Include the raw (often Banglish) student title+body so Banglish queries
+    // match — the AI fields are Bengali script and miss cross-script otherwise.
+    const embedText = `${data.title}\n${data.body}\n${ex.question}\n${ex.answer}\n${ex.summary}`;
 
     const fields = {
       title: data.title,
@@ -234,18 +246,26 @@ export class KbService {
     const vector = `[${vec.join(',')}]`;
     const rows = await this.prisma.$queryRaw<any[]>`
       SELECT id, title, body, moderator_answer AS "moderatorAnswer",
+             moderator_voice AS "moderatorVoice", summary, category, confidence,
              1 - (embedding <=> ${vector}::vector) AS similarity
       FROM kb_posts
       WHERE embedding IS NOT NULL
       ORDER BY embedding <=> ${vector}::vector
       LIMIT ${limit}
     `;
-    return rows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      body: r.body,
-      moderatorAnswer: r.moderatorAnswer ?? null,
-    }));
+    return rows
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        body: r.body,
+        moderatorAnswer: r.moderatorAnswer ?? null,
+        moderatorVoice: r.moderatorVoice ?? null,
+        summary: r.summary ?? null,
+        category: r.category ?? null,
+        confidence: r.confidence ?? null,
+        similarity: typeof r.similarity === 'number' ? r.similarity : Number(r.similarity),
+      }))
+      .filter((r) => (r.similarity ?? 0) >= SIMILARITY_THRESHOLD);
   }
 
   // Falls back to text search when pgvector unavailable
@@ -261,7 +281,16 @@ export class KbService {
           ],
         },
         take: limit,
-        select: { id: true, title: true, body: true, moderatorAnswer: true },
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          moderatorAnswer: true,
+          moderatorVoice: true,
+          summary: true,
+          category: true,
+          confidence: true,
+        },
       });
       return rows;
     }

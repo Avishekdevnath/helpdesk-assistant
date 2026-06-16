@@ -40,11 +40,16 @@ export class AiService {
     ]);
     const mode = decideMode(questionHits);
 
-    const kbForPrompt = kbHits.map((hit) => ({
-      title: hit.title,
-      content: hit.body,
-      moderatorAnswer: hit.moderatorAnswer ?? null,
-    }));
+    // Only confident KB hits feed the prompt. Legacy rows (null confidence)
+    // are kept so the existing KB still helps.
+    const kbForPrompt = kbHits
+      .filter((hit) => hit.confidence == null || hit.confidence >= 0.6)
+      .map((hit) => ({
+        title: hit.title,
+        content: hit.body,
+        moderatorAnswer: hit.moderatorAnswer ?? null,
+        moderatorVoice: hit.moderatorVoice ?? null,
+      }));
 
     const prompt = buildPrompt(mode, { title: dto.postTitle, body: dto.postBody }, kbForPrompt, questionHits);
 

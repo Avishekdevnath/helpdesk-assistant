@@ -4,6 +4,7 @@ export interface KbHit {
   title: string;
   content: string;
   moderatorAnswer?: string | null;
+  moderatorVoice?: string | null;
 }
 
 export function decideMode(questionHits: Pick<QuestionEntry, 'type'>[]): ReplyMode {
@@ -30,10 +31,12 @@ export function buildPrompt(
     '- Return plain text only. Do not use Markdown, bold markers, headings, bullets, code fences, or decorative formatting.',
   ].join('\n');
 
-  const exemplars = kb.filter((e) => e.moderatorAnswer);
+  const exemplars = kb.filter((e) => e.moderatorVoice || e.moderatorAnswer);
   const exemplarBlock = exemplars.length
     ? 'Exemplar replies from real moderators (copy their tone and grounding, but always write your reply in Bengali script — convert any Banglish here to বাংলা হরফ):\n' +
-      exemplars.map((e) => `Q: ${e.title}\nModerator answer: ${e.moderatorAnswer}`).join('\n\n')
+      exemplars
+        .map((e) => `Q: ${e.title}\nModerator answer: ${e.moderatorVoice || e.moderatorAnswer}`)
+        .join('\n\n')
     : null;
 
   const kbBlock = kb.length
