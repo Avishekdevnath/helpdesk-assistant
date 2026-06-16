@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Param, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Patch, Param, Body, Query } from '@nestjs/common';
 import { KbService } from './kb.service';
 
 interface ScrapPostDto {
@@ -30,6 +30,15 @@ interface ExtractDto {
   attributes?: Record<string, unknown>;
   fullContent?: string;
   screenshots?: string[];
+}
+
+interface UpdatePostDto {
+  moderatorAnswer?: string;
+  moderatorVoice?: string;
+  summary?: string;
+  category?: string;
+  tags?: string[];
+  status?: string;
 }
 
 @Controller('kb')
@@ -72,6 +81,11 @@ export class KbController {
   @Get('posts/:id')
   async getPost(@Param('id') id: string) {
     return this.kbService.getPostById(id);
+  }
+
+  @Patch('posts/:id')
+  async updatePost(@Param('id') id: string, @Body() data: UpdatePostDto) {
+    return this.kbService.updatePost(id, data);
   }
 
   @Delete('posts/:id')

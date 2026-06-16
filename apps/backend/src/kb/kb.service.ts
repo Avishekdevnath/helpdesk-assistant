@@ -308,6 +308,35 @@ export class KbService {
     return this.prisma.kbPost.findUnique({ where: { id } });
   }
 
+  async updatePost(
+    id: string,
+    data: Partial<{
+      moderatorAnswer: string;
+      moderatorVoice: string;
+      summary: string;
+      category: string;
+      tags: string[];
+      status: string;
+    }>,
+  ) {
+    const row = await this.prisma.kbPost.update({ where: { id }, data });
+
+    // Re-embed if answer/summary changed (they feed the embedding text).
+    if (data.moderatorAnswer !== undefined || data.summary !== undefined) {
+      try {
+        const embedText = `${row.title}\n${row.body}\n${row.moderatorAnswer ?? ''}\n${row.summary ?? ''}`;
+        const vec = await this.embedding.embed(embedText);
+        const vector = `[${vec.join(',')}]`;
+        await this.prisma.$executeRaw`
+          UPDATE kb_posts SET embedding = ${vector}::vector WHERE id = ${row.id}
+        `;
+      } catch {
+        // best-effort re-embed; row already updated
+      }
+    }
+    return row;
+  }
+
   async deletePost(id: string) {
     return this.prisma.kbPost.delete({ where: { id } });
   }
