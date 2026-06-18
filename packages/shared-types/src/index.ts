@@ -33,6 +33,9 @@ export interface GenerateReplyRequest {
   postTitle: string;
   postBody: string;
   postUrl?: string;
+  // When drafting a reply to a specific comment (not the post itself).
+  replyToAuthor?: string;
+  replyToText?: string;
 }
 
 export interface GenerateReplyResponse {

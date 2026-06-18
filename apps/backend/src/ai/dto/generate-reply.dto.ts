@@ -12,4 +12,12 @@ export class GenerateReplyDto {
   @IsOptional()
   @IsUrl()
   postUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  replyToAuthor?: string;
+
+  @IsOptional()
+  @IsString()
+  replyToText?: string;
 }

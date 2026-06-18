@@ -51,7 +51,12 @@ export class AiService {
         moderatorVoice: hit.moderatorVoice ?? null,
       }));
 
-    const prompt = buildPrompt(mode, { title: dto.postTitle, body: dto.postBody }, kbForPrompt, questionHits);
+    const replyTo =
+      dto.replyToText && dto.replyToText.trim()
+        ? { author: dto.replyToAuthor ?? 'a user', text: dto.replyToText }
+        : undefined;
+
+    const prompt = buildPrompt(mode, { title: dto.postTitle, body: dto.postBody }, kbForPrompt, questionHits, replyTo);
 
     const response = await this.client.responses.create({
       model: 'gpt-5.4-mini',

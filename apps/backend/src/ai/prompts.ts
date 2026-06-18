@@ -17,6 +17,7 @@ export function buildPrompt(
   post: { title: string; body: string },
   kb: KbHit[],
   questions: Pick<QuestionEntry, 'questionText' | 'hint1' | 'hint2'>[],
+  replyTo?: { author: string; text: string },
 ): string {
   const replyStyle = [
     'Reply style:',
@@ -56,6 +57,15 @@ export function buildPrompt(
 
   const postBlock = `Title: ${post.title}\nBody: ${post.body}`;
 
+  // When replying to a specific comment, the draft must address THAT comment,
+  // using the post only as background.
+  const replyToBlock = replyTo
+    ? `You are replying to this specific comment by ${replyTo.author} (address it directly; the post above is only background):\n"${replyTo.text}"`
+    : null;
+  const replyToInstruction = replyTo
+    ? `Write a reply that directly responds to ${replyTo.author}'s comment above. Stay grounded in the KB context; never mention the KB or your source.`
+    : 'Write a clear, helpful, encouraging reply grounded in the KB context, but never mention the KB or your source to the student.';
+
   switch (mode) {
     case 'full_answer':
       return [
@@ -64,7 +74,8 @@ export function buildPrompt(
         exemplarBlock,
         `KB context:\n${kbBlock}`,
         `Post:\n${postBlock}`,
-        'Write a clear, helpful, encouraging reply grounded in the KB context, but never mention the KB or your source to the student.',
+        replyToBlock,
+        replyToInstruction,
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -76,6 +87,7 @@ export function buildPrompt(
         exemplarBlock,
         `Question context:\n${questionBlock}`,
         `Post:\n${postBlock}`,
+        replyToBlock,
         'Use the Socratic method. Give a hint that points toward the next step. Never reveal the final answer.',
       ]
         .filter(Boolean)
@@ -88,6 +100,7 @@ export function buildPrompt(
         exemplarBlock,
         `Question context:\n${questionBlock}`,
         `Post:\n${postBlock}`,
+        replyToBlock,
         'Give a hint and point to the relevant concept. Do not solve it fully.',
       ]
         .filter(Boolean)
