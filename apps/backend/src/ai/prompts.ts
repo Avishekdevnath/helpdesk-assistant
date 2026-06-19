@@ -2,17 +2,13 @@ import type { QuestionEntry, ReplyMode } from '@helpdesk/shared-types';
 
 export function buildRefinePrompt(draft: string, studentPost: string, taste?: string): string {
   return [
-    'You are a Bengali language editor and semantic checker for a student helpdesk.',
+    'You are an editor and semantic checker for a student helpdesk.',
     'You will receive a student post and a moderator reply draft. Your job:',
     '1. Check that the reply actually addresses what the student asked. If it does not, rewrite it so it does — but only use facts already present in the draft (do not invent new information).',
-    '2. Fix Bengali grammar mistakes, especially these common errors:',
-    '   - "X করার জন্য দুঃখিত" (sorry for doing X — implies X already happened) → use "X করতে পারছি না বলে দুঃখিত" or "দুঃখিত, X সম্ভব নয়" when declining a request.',
-    '   - "X এর জন্য ধন্যবাদ" used when the student is requesting, not giving — remove or rephrase.',
-    '   - Verb-subject inversions that change the agent of an action.',
+    '2. Fix grammar mistakes, especially verb-subject inversions that change who is doing what.',
     '3. Remove any phrase referencing a knowledge base, KB, internal source, or how you know something.',
-    '4. Keep Bengali script (বাংলা হরফ). English only for technical terms.',
-    '5. Keep length 2–4 sentences. Do not expand or add new facts.',
-    '6. Return plain text only. No markdown, bullets, or headings.',
+    '4. Keep length 2–4 sentences. Do not expand or add new facts.',
+    '5. Return plain text only. No markdown, bullets, or headings.',
     taste?.trim() ? `Tone guide:\n${taste.trim()}` : null,
     `Student post:\n${studentPost}`,
     `Draft to refine:\n${draft}`,
@@ -46,8 +42,7 @@ export function buildPrompt(
 ): string {
   const replyStyle = [
     'Reply style:',
-    '- Write in Bengali using Bangla script (বাংলা হরফ / Unicode), NOT romanized Banglish. Example: write "আপনি" not "apni", "ধন্যবাদ" not "dhonnobad".',
-    '- Use English only for technical terms (e.g. array, loop, supervisor, assignment) where natural for students.',
+    '- Write in English.',
     '- Match the Phitron helpdesk tone: warm, concise, simple student-friendly, and practical.',
     '- Keep it SHORT: 2-4 sentences. No long explanations, no repetition, no padding.',
     '- For simple conceptual posts, answer directly with a small example when it helps.',
