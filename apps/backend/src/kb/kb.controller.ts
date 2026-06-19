@@ -107,4 +107,9 @@ export class KbController {
   async importMarkdown(@Body() body: { markdown: string; category?: string }) {
     return this.kbService.importMarkdown(body.markdown, body.category);
   }
+
+  @Post('posts/:id/reextract')
+  async reextractPost(@Param('id') id: string) {
+    return this.kbService.reextractPost(id);
+  }
 }

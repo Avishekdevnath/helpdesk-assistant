@@ -349,6 +349,53 @@ export class KbService {
     return this.prisma.kbPost.delete({ where: { id } });
   }
 
+  // Re-run AI extraction on an existing post — no gate, manual trigger.
+  async reextractPost(id: string) {
+    const post = await this.prisma.kbPost.findUnique({ where: { id } });
+    if (!post) throw new Error('Post not found');
+
+    const discussion = Array.isArray(post.discussion) ? post.discussion : [];
+    const ex = await this.aiExtract({
+      title: post.title,
+      body: post.body,
+      url: post.url,
+      status: post.status ?? 'resolved',
+      course: post.course ?? undefined,
+      batch: post.batch ?? undefined,
+      discussion,
+      fullContent: post.rawContent ?? undefined,
+    });
+
+    if (!ex.answer) return { updated: false, reason: 'ai: no answer extracted' };
+
+    const confidence = this.confidenceToNumber(ex.confidence);
+    const embedText = `${post.title}\n${post.body}\n${ex.question}\n${ex.answer}\n${ex.summary}`;
+
+    const updated = await this.prisma.kbPost.update({
+      where: { id },
+      data: {
+        moderatorAnswer: ex.answer,
+        moderatorVoice: ex.moderatorVoice || undefined,
+        summary: ex.summary,
+        category: ex.category,
+        tags: ex.tags,
+        confidence,
+      },
+    });
+
+    try {
+      const vec = await this.embedding.embed(embedText);
+      const vector = `[${vec.join(',')}]`;
+      await this.prisma.$executeRaw`
+        UPDATE kb_posts SET embedding = ${vector}::vector WHERE id = ${updated.id}
+      `;
+    } catch {
+      // best-effort re-embed
+    }
+
+    return { updated: true, tags: ex.tags, category: ex.category, confidence };
+  }
+
   async getStats() {
     const total = await this.prisma.kbPost.count();
     const byCourse = await this.prisma.kbPost.groupBy({ by: ['course'], _count: true });
