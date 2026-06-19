@@ -80,19 +80,21 @@ export class KbService {
     const embedText = `${data.title}\n${data.body}`;
 
     // Embed in parallel with DB write — DB write never blocked by OpenAI
+    const fields = {
+      title: data.title,
+      body: data.body,
+      discussion: data.discussion as Prisma.InputJsonValue,
+      course: data.course,
+      batch: data.batch,
+      rawContent: data.fullContent,
+      moderatorAnswer,
+      metadata: {} as Prisma.InputJsonValue,
+    };
     const [post, vec] = await Promise.allSettled([
-      this.prisma.kbPost.create({
-        data: {
-          title: data.title,
-          body: data.body,
-          discussion: data.discussion as Prisma.InputJsonValue,
-          url: data.url,
-          course: data.course,
-          batch: data.batch,
-          rawContent: data.fullContent,
-          moderatorAnswer,
-          metadata: {} as Prisma.InputJsonValue,
-        },
+      this.prisma.kbPost.upsert({
+        where: { url: data.url },
+        create: { url: data.url, ...fields },
+        update: fields,
       }),
       this.embedding.embed(embedText),
     ]);
