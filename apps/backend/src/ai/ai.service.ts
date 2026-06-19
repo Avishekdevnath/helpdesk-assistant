@@ -58,18 +58,19 @@ export class AiService {
 
     const prompt = buildPrompt(mode, { title: dto.postTitle, body: dto.postBody }, kbForPrompt, questionHits, replyTo);
 
-    const response = await this.client.responses.create({
+    const response = await this.client.chat.completions.create({
       model: 'gpt-4o-mini',
-      max_output_tokens: 1024,
-      input: prompt,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
     });
-    if (!response.output_text) {
+    const text = response.choices?.[0]?.message?.content;
+    if (!text) {
       throw new InternalServerErrorException('OpenAI returned no text');
     }
 
     return {
       mode,
-      reply: toPlainText(response.output_text),
+      reply: toPlainText(text),
       kbHits: kbHits.map((entry) => ({ id: entry.id, title: entry.title })),
       questionHits: questionHits.map((entry) => ({ id: entry.id, questionText: entry.questionText })),
     };
