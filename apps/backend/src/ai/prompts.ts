@@ -43,7 +43,15 @@ export function buildPrompt(
     : null;
 
   const kbBlock = kb.length
-    ? kb.map((entry) => `### ${entry.title}\n${entry.content}`).join('\n\n')
+    ? kb
+        .map((entry) => {
+          let block = `### ${entry.title}\nQ: ${entry.content}`;
+          if (entry.moderatorAnswer) block += `\nA: ${entry.moderatorAnswer}`;
+          else if (entry.moderatorVoice) block += `\nA: ${entry.moderatorVoice}`;
+          if (entry.summary) block += `\nSummary: ${entry.summary}`;
+          return block;
+        })
+        .join('\n\n')
     : '(no KB context)';
 
   const questionBlock = questions.length
