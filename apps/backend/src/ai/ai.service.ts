@@ -59,7 +59,7 @@ export class AiService {
     const prompt = buildPrompt(mode, { title: dto.postTitle, body: dto.postBody }, kbForPrompt, questionHits, replyTo);
 
     const response = await this.client.responses.create({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-4o-mini',
       max_output_tokens: 1024,
       input: prompt,
     });

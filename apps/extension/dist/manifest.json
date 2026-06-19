@@ -14,10 +14,7 @@
     "downloads"
   ],
   "host_permissions": [
-    "https://helpdesk.phitron.io/*",
-    "https://helpdesk-assistant-extension.vercel.app/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "<all_urls>"
   ],
   "side_panel": {
     "default_path": "index.html"
@@ -29,7 +26,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.tsx-B5MEDsoP.js"
+        "assets/index.tsx-Du2YTErl.js"
       ],
       "matches": [
         "https://helpdesk.phitron.io/*"
@@ -43,7 +40,7 @@
         "https://helpdesk.phitron.io/*"
       ],
       "resources": [
-        "assets/index.tsx-B5MEDsoP.js"
+        "assets/index.tsx-Du2YTErl.js"
       ],
       "use_dynamic_url": false
     }
