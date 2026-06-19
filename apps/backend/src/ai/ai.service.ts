@@ -78,7 +78,8 @@ export class AiService {
       throw new InternalServerErrorException('OpenAI returned no text');
     }
 
-    const refinePrompt = buildRefinePrompt(draft, taste || undefined);
+    const studentPost = `${dto.postTitle}\n${dto.postBody}`;
+    const refinePrompt = buildRefinePrompt(draft, studentPost, taste || undefined);
     const refineResponse = await this.client.chat.completions.create({
       model: 'gpt-4o-mini',
       max_tokens: 1024,

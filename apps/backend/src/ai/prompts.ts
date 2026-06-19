@@ -1,18 +1,22 @@
 import type { QuestionEntry, ReplyMode } from '@helpdesk/shared-types';
 
-export function buildRefinePrompt(draft: string, taste?: string): string {
+export function buildRefinePrompt(draft: string, studentPost: string, taste?: string): string {
   return [
-    'You are a Bengali language editor for a student helpdesk.',
-    'Your job is to refine a moderator reply draft. Fix any Bengali grammar or spelling mistakes. Do NOT change the meaning or add new information.',
-    'Rules:',
-    '- Keep Bengali script (বাংলা হরফ). Never switch to Banglish.',
-    '- Remove any phrase that references a knowledge base, KB, internal source, or how you know something (e.g. "KB অনুযায়ী", "according to our records", etc.).',
-    '- Keep length the same (2–4 sentences). Do not expand.',
-    '- Return plain text only. No markdown, no bullets, no headings.',
-    '- If the draft is already correct, return it unchanged.',
-    taste?.trim() ? `Tone guide (apply to the refined version):\n${taste.trim()}` : null,
+    'You are a Bengali language editor and semantic checker for a student helpdesk.',
+    'You will receive a student post and a moderator reply draft. Your job:',
+    '1. Check that the reply actually addresses what the student asked. If it does not, rewrite it so it does — but only use facts already present in the draft (do not invent new information).',
+    '2. Fix Bengali grammar mistakes, especially these common errors:',
+    '   - "X করার জন্য দুঃখিত" (sorry for doing X — implies X already happened) → use "X করতে পারছি না বলে দুঃখিত" or "দুঃখিত, X সম্ভব নয়" when declining a request.',
+    '   - "X এর জন্য ধন্যবাদ" used when the student is requesting, not giving — remove or rephrase.',
+    '   - Verb-subject inversions that change the agent of an action.',
+    '3. Remove any phrase referencing a knowledge base, KB, internal source, or how you know something.',
+    '4. Keep Bengali script (বাংলা হরফ). English only for technical terms.',
+    '5. Keep length 2–4 sentences. Do not expand or add new facts.',
+    '6. Return plain text only. No markdown, bullets, or headings.',
+    taste?.trim() ? `Tone guide:\n${taste.trim()}` : null,
+    `Student post:\n${studentPost}`,
     `Draft to refine:\n${draft}`,
-    'Return only the refined reply text — nothing else.',
+    'Return only the corrected reply — nothing else.',
   ]
     .filter(Boolean)
     .join('\n\n');
