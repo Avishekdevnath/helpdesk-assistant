@@ -3,7 +3,8 @@ import type { QuestionEntry, ReplyMode } from '@helpdesk/shared-types';
 export function buildRefinePrompt(draft: string, studentPost: string, taste?: string): string {
   return [
     'You are an editor and semantic checker for a student helpdesk.',
-    'You will receive a student post and a moderator reply draft. Your job:',
+    'CRITICAL: The reply MUST be in English only. If the draft is in Bengali or Banglish, translate it to English first, then apply the rules below.',
+    'Your job:',
     '1. Check that the reply actually addresses what the student asked. If it does not, rewrite it so it does — but only use facts already present in the draft (do not invent new information).',
     '2. Fix grammar mistakes, especially verb-subject inversions that change who is doing what.',
     '3. Remove any phrase referencing a knowledge base, KB, internal source, or how you know something.',
@@ -42,7 +43,7 @@ export function buildPrompt(
 ): string {
   const replyStyle = [
     'Reply style:',
-    '- Write in English.',
+    '- CRITICAL: Write ONLY in English. This overrides everything else. Even if the student post, KB context, or example replies are in Bengali or Banglish — your reply MUST be in English.',
     '- Match the Phitron helpdesk tone: warm, concise, simple student-friendly, and practical.',
     '- Keep it SHORT: 2-4 sentences. No long explanations, no repetition, no padding.',
     '- For simple conceptual posts, answer directly with a small example when it helps.',
