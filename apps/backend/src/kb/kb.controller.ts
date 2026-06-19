@@ -102,4 +102,9 @@ export class KbController {
   async getUrls() {
     return this.kbService.getAllUrls();
   }
+
+  @Post('import-md')
+  async importMarkdown(@Body() body: { markdown: string; category?: string }) {
+    return this.kbService.importMarkdown(body.markdown, body.category);
+  }
 }

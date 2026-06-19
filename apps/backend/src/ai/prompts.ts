@@ -1,10 +1,29 @@
 import type { QuestionEntry, ReplyMode } from '@helpdesk/shared-types';
 
+export function buildRefinePrompt(draft: string, taste?: string): string {
+  return [
+    'You are a Bengali language editor for a student helpdesk.',
+    'Your job is to refine a moderator reply draft. Fix any Bengali grammar or spelling mistakes. Do NOT change the meaning or add new information.',
+    'Rules:',
+    '- Keep Bengali script (বাংলা হরফ). Never switch to Banglish.',
+    '- Remove any phrase that references a knowledge base, KB, internal source, or how you know something (e.g. "KB অনুযায়ী", "according to our records", etc.).',
+    '- Keep length the same (2–4 sentences). Do not expand.',
+    '- Return plain text only. No markdown, no bullets, no headings.',
+    '- If the draft is already correct, return it unchanged.',
+    taste?.trim() ? `Tone guide (apply to the refined version):\n${taste.trim()}` : null,
+    `Draft to refine:\n${draft}`,
+    'Return only the refined reply text — nothing else.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export interface KbHit {
   title: string;
   content: string;
   moderatorAnswer?: string | null;
   moderatorVoice?: string | null;
+  summary?: string | null;
 }
 
 export function decideMode(questionHits: Pick<QuestionEntry, 'type'>[]): ReplyMode {
@@ -18,6 +37,8 @@ export function buildPrompt(
   kb: KbHit[],
   questions: Pick<QuestionEntry, 'questionText' | 'hint1' | 'hint2'>[],
   replyTo?: { author: string; text: string },
+  coreInfo?: string,
+  taste?: string,
 ): string {
   const replyStyle = [
     'Reply style:',
@@ -33,6 +54,14 @@ export function buildPrompt(
     '- Give the complete answer directly in the draft. Do not end with an offer like "চাইলে আমি..." or "let me know". Do not ask follow-up questions.',
     '- Return plain text only. Do not use Markdown, bold markers, headings, bullets, code fences, or decorative formatting.',
   ].join('\n');
+
+  const coreInfoBlock = coreInfo?.trim()
+    ? `Core background knowledge (always true — use as ground truth):\n${coreInfo.trim()}`
+    : null;
+
+  const tasteBlock = taste?.trim()
+    ? `Reply format and tone guide (follow exactly for phrasing and style):\n${taste.trim()}`
+    : null;
 
   const exemplars = kb.filter((e) => e.moderatorVoice || e.moderatorAnswer);
   const exemplarBlock = exemplars.length
@@ -65,8 +94,6 @@ export function buildPrompt(
 
   const postBlock = `Title: ${post.title}\nBody: ${post.body}`;
 
-  // When replying to a specific comment, the draft must address THAT comment,
-  // using the post only as background.
   const replyToBlock = replyTo
     ? `You are replying to this specific comment by ${replyTo.author} (address it directly; the post above is only background):\n"${replyTo.text}"`
     : null;
@@ -78,6 +105,8 @@ export function buildPrompt(
     case 'full_answer':
       return [
         'You are an expert edutech moderator.',
+        coreInfoBlock,
+        tasteBlock,
         replyStyle,
         exemplarBlock,
         `KB context:\n${kbBlock}`,
@@ -90,6 +119,8 @@ export function buildPrompt(
     case 'hint_assignment':
       return [
         'You are an expert edutech moderator.',
+        coreInfoBlock,
+        tasteBlock,
         'This is a GRADED assignment question. Do NOT solve it.',
         replyStyle,
         exemplarBlock,
@@ -103,6 +134,8 @@ export function buildPrompt(
     case 'hint_practice':
       return [
         'You are an expert edutech moderator.',
+        coreInfoBlock,
+        tasteBlock,
         'This is a practice question. Encourage exploration.',
         replyStyle,
         exemplarBlock,

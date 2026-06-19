@@ -354,4 +354,86 @@ export class KbService {
     const byCourse = await this.prisma.kbPost.groupBy({ by: ['course'], _count: true });
     return { total, byCourse: byCourse.filter((c) => c.course) };
   }
+
+  // Parse markdown into sections (split on ## headings) and upsert each as a KB entry.
+  // Each section becomes: title = heading text, body = section content.
+  // URL is auto-generated as internal://<slug>-<hash> so re-imports update rather than duplicate.
+  async importMarkdown(markdown: string, category?: string): Promise<{ imported: number; entries: string[] }> {
+    const sections = this.parseMarkdownSections(markdown);
+    if (!sections.length) return { imported: 0, entries: [] };
+
+    const titles: string[] = [];
+    for (const section of sections) {
+      const slug = section.title
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .slice(0, 60);
+      // Stable hash from slug so re-import of same title = same URL = upsert
+      const hash = this.simpleHash(slug);
+      const url = `internal://${slug}-${hash}`;
+
+      const fields = {
+        title: section.title,
+        body: section.body,
+        discussion: [] as Prisma.InputJsonValue,
+        category: category ?? null,
+        metadata: {} as Prisma.InputJsonValue,
+      };
+
+      const row = await this.prisma.kbPost.upsert({
+        where: { url },
+        create: { url, ...fields },
+        update: fields,
+      });
+
+      try {
+        const vec = await this.embedding.embed(`${section.title}\n${section.body}`);
+        const vector = `[${vec.join(',')}]`;
+        await this.prisma.$executeRaw`
+          UPDATE kb_posts SET embedding = ${vector}::vector WHERE id = ${row.id}
+        `;
+      } catch {
+        // best-effort embed
+      }
+
+      titles.push(section.title);
+    }
+
+    return { imported: titles.length, entries: titles };
+  }
+
+  private parseMarkdownSections(md: string): { title: string; body: string }[] {
+    const lines = md.split('\n');
+    const sections: { title: string; body: string }[] = [];
+    let current: { title: string; lines: string[] } | null = null;
+
+    for (const line of lines) {
+      const headingMatch = /^#{1,3}\s+(.+)/.exec(line);
+      if (headingMatch) {
+        if (current) {
+          const body = current.lines.join('\n').trim();
+          if (body) sections.push({ title: current.title, body });
+        }
+        current = { title: headingMatch[1].trim(), lines: [] };
+      } else if (current) {
+        current.lines.push(line);
+      }
+    }
+    if (current) {
+      const body = current.lines.join('\n').trim();
+      if (body) sections.push({ title: current.title, body });
+    }
+
+    return sections;
+  }
+
+  private simpleHash(str: string): string {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    }
+    return Math.abs(h).toString(36).slice(0, 6);
+  }
 }
