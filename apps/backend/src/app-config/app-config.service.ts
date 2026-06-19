@@ -17,4 +17,12 @@ export class AppConfigService {
       update: { value },
     });
   }
+
+  async listByPrefix(prefix: string): Promise<{ key: string; value: string }[]> {
+    return this.prisma.config.findMany({ where: { key: { startsWith: prefix } } });
+  }
+
+  async deleteKey(key: string): Promise<void> {
+    await this.prisma.config.delete({ where: { key } });
+  }
 }
