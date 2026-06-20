@@ -22,6 +22,6 @@ export class GenerateReplyDto {
   replyToText?: string;
 
   @IsOptional()
-  @IsIn(['en', 'original'])
-  replyLanguage?: 'en' | 'original';
+  @IsIn(['en', 'bn', 'original'])
+  replyLanguage?: 'en' | 'bn' | 'original';
 }

@@ -35,7 +35,7 @@ export interface GenerateReplyRequest {
   postUrl?: string;
   replyToAuthor?: string;
   replyToText?: string;
-  replyLanguage?: 'en' | 'original';
+  replyLanguage?: 'en' | 'bn' | 'original';
 }
 
 export interface GenerateReplyResponse {

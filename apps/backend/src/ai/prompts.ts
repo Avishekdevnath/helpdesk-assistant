@@ -39,7 +39,7 @@ export interface PromptOverrides {
   replyStyle?: string;
   assignmentInstruction?: string;
   practiceInstruction?: string;
-  replyLanguage?: 'en' | 'original';
+  replyLanguage?: 'en' | 'bn' | 'original';
 }
 
 export function buildRefinePrompt(
@@ -47,12 +47,14 @@ export function buildRefinePrompt(
   studentPost: string,
   taste?: string,
   refineInstructions?: string,
-  replyLanguage?: 'en' | 'original',
+  replyLanguage?: 'en' | 'bn' | 'original',
 ): string {
   const languageBlock =
     replyLanguage === 'original'
       ? "LANGUAGE RULE (highest priority): Keep the reply in the SAME LANGUAGE as the student's post. Do NOT translate to English."
-      : null;
+      : replyLanguage === 'bn'
+        ? 'LANGUAGE RULE (highest priority): Write the reply in Bengali (বাংলা). Do NOT translate to English.'
+        : null;
   return [
     languageBlock,
     refineInstructions?.trim() || DEFAULT_REFINE_INSTRUCTIONS,
@@ -95,7 +97,9 @@ export function buildPrompt(
   const languageBlock =
     overrides?.replyLanguage === 'original'
       ? "LANGUAGE RULE (highest priority): Reply in the SAME LANGUAGE as the student's post. Do NOT translate. This overrides any other language instruction in this prompt."
-      : null;
+      : overrides?.replyLanguage === 'bn'
+        ? 'LANGUAGE RULE (highest priority): Write your reply in Bengali (বাংলা). Do NOT write in English. This overrides any other language instruction in this prompt.'
+        : null;
 
   const coreInfoBlock = coreInfo?.trim()
     ? `Core background knowledge (always true — use as ground truth):\n${coreInfo.trim()}`
