@@ -1,15 +1,61 @@
 import type { QuestionEntry, ReplyMode } from '@helpdesk/shared-types';
 
-export function buildRefinePrompt(draft: string, studentPost: string, taste?: string): string {
+export const DEFAULT_IDENTITY =
+  'You are an expert edutech moderator.';
+
+export const DEFAULT_REPLY_STYLE = [
+  'Reply style:',
+  '- CRITICAL: Write ONLY in English. This overrides everything else. Even if the student post, KB context, or example replies are in Bengali or Banglish — your reply MUST be in English.',
+  '- Match the Phitron helpdesk tone: warm, concise, simple student-friendly, and practical.',
+  '- Keep it SHORT: 2-4 sentences. No long explanations, no repetition, no padding.',
+  '- For simple conceptual posts, answer directly with a small example when it helps.',
+  '- Only state facts present in the KB context. Do NOT guess or invent specifics (dates, schedules, deadlines, results).',
+  '- NEVER reference the knowledge base, KB, internal source, or how you know something. Speak as a moderator who simply knows.',
+  '- When stating something that may have changed (e.g. a planned date), say "based on available information" rather than stating it as certain.',
+  '- If the asked info is NOT in the KB context, do not make one up. Say briefly that it is not confirmed yet and to watch official announcements.',
+  '- Give the complete answer directly. Do not end with an offer like "let me know". Do not ask follow-up questions.',
+  '- Return plain text only. Do not use Markdown, bold markers, headings, bullets, code fences, or decorative formatting.',
+].join('\n');
+
+export const DEFAULT_ASSIGNMENT_INSTRUCTION =
+  'This is a GRADED assignment question. Do NOT solve it.\n\nUse the Socratic method. Give a hint that points toward the next step. Never reveal the final answer.';
+
+export const DEFAULT_PRACTICE_INSTRUCTION =
+  'This is a practice question. Encourage exploration.\n\nGive a hint and point to the relevant concept. Do not solve it fully.';
+
+export const DEFAULT_REFINE_INSTRUCTIONS = [
+  'You are an editor and semantic checker for a student helpdesk.',
+  'CRITICAL: The reply MUST be in English only. If the draft is in Bengali or Banglish, translate it to English first, then apply the rules below.',
+  'Your job:',
+  '1. Check that the reply actually addresses what the student asked. If it does not, rewrite it so it does — but only use facts already present in the draft (do not invent new information).',
+  '2. Fix grammar mistakes, especially verb-subject inversions that change who is doing what.',
+  '3. Remove any phrase referencing a knowledge base, KB, internal source, or how you know something.',
+  '4. Keep length 2–4 sentences. Do not expand or add new facts.',
+  '5. Return plain text only. No markdown, bullets, or headings.',
+].join('\n');
+
+export interface PromptOverrides {
+  identity?: string;
+  replyStyle?: string;
+  assignmentInstruction?: string;
+  practiceInstruction?: string;
+  replyLanguage?: 'en' | 'original';
+}
+
+export function buildRefinePrompt(
+  draft: string,
+  studentPost: string,
+  taste?: string,
+  refineInstructions?: string,
+  replyLanguage?: 'en' | 'original',
+): string {
+  const languageBlock =
+    replyLanguage === 'original'
+      ? "LANGUAGE RULE (highest priority): Keep the reply in the SAME LANGUAGE as the student's post. Do NOT translate to English."
+      : null;
   return [
-    'You are an editor and semantic checker for a student helpdesk.',
-    'CRITICAL: The reply MUST be in English only. If the draft is in Bengali or Banglish, translate it to English first, then apply the rules below.',
-    'Your job:',
-    '1. Check that the reply actually addresses what the student asked. If it does not, rewrite it so it does — but only use facts already present in the draft (do not invent new information).',
-    '2. Fix grammar mistakes, especially verb-subject inversions that change who is doing what.',
-    '3. Remove any phrase referencing a knowledge base, KB, internal source, or how you know something.',
-    '4. Keep length 2–4 sentences. Do not expand or add new facts.',
-    '5. Return plain text only. No markdown, bullets, or headings.',
+    languageBlock,
+    refineInstructions?.trim() || DEFAULT_REFINE_INSTRUCTIONS,
     taste?.trim() ? `Tone guide:\n${taste.trim()}` : null,
     `Student post:\n${studentPost}`,
     `Draft to refine:\n${draft}`,
@@ -40,20 +86,16 @@ export function buildPrompt(
   replyTo?: { author: string; text: string },
   coreInfo?: string,
   taste?: string,
+  overrides?: PromptOverrides,
 ): string {
-  const replyStyle = [
-    'Reply style:',
-    '- CRITICAL: Write ONLY in English. This overrides everything else. Even if the student post, KB context, or example replies are in Bengali or Banglish — your reply MUST be in English.',
-    '- Match the Phitron helpdesk tone: warm, concise, simple student-friendly, and practical.',
-    '- Keep it SHORT: 2-4 sentences. No long explanations, no repetition, no padding.',
-    '- For simple conceptual posts, answer directly with a small example when it helps.',
-    '- Only state facts present in the KB context. Do NOT guess or invent specifics (dates, schedules, deadlines, results).',
-    '- NEVER reference the knowledge base, KB, internal source, or how you know something. Speak as a moderator who simply knows.',
-    '- When stating something that may have changed (e.g. a planned date), say "based on available information" rather than stating it as certain.',
-    '- If the asked info is NOT in the KB context, do not make one up. Say briefly that it is not confirmed yet and to watch official announcements.',
-    '- Give the complete answer directly. Do not end with an offer like "let me know". Do not ask follow-up questions.',
-    '- Return plain text only. Do not use Markdown, bold markers, headings, bullets, code fences, or decorative formatting.',
-  ].join('\n');
+  const identity = overrides?.identity?.trim() || DEFAULT_IDENTITY;
+  const replyStyle = overrides?.replyStyle?.trim() || DEFAULT_REPLY_STYLE;
+  const assignmentInstruction = overrides?.assignmentInstruction?.trim() || DEFAULT_ASSIGNMENT_INSTRUCTION;
+  const practiceInstruction = overrides?.practiceInstruction?.trim() || DEFAULT_PRACTICE_INSTRUCTION;
+  const languageBlock =
+    overrides?.replyLanguage === 'original'
+      ? "LANGUAGE RULE (highest priority): Reply in the SAME LANGUAGE as the student's post. Do NOT translate. This overrides any other language instruction in this prompt."
+      : null;
 
   const coreInfoBlock = coreInfo?.trim()
     ? `Core background knowledge (always true — use as ground truth):\n${coreInfo.trim()}`
@@ -104,7 +146,8 @@ export function buildPrompt(
   switch (mode) {
     case 'full_answer':
       return [
-        'You are an expert edutech moderator.',
+        languageBlock,
+        identity,
         coreInfoBlock,
         tasteBlock,
         replyStyle,
@@ -118,31 +161,31 @@ export function buildPrompt(
         .join('\n\n');
     case 'hint_assignment':
       return [
-        'You are an expert edutech moderator.',
+        languageBlock,
+        identity,
         coreInfoBlock,
         tasteBlock,
-        'This is a GRADED assignment question. Do NOT solve it.',
+        assignmentInstruction,
         replyStyle,
         exemplarBlock,
         `Question context:\n${questionBlock}`,
         `Post:\n${postBlock}`,
         replyToBlock,
-        'Use the Socratic method. Give a hint that points toward the next step. Never reveal the final answer.',
       ]
         .filter(Boolean)
         .join('\n\n');
     case 'hint_practice':
       return [
-        'You are an expert edutech moderator.',
+        languageBlock,
+        identity,
         coreInfoBlock,
         tasteBlock,
-        'This is a practice question. Encourage exploration.',
+        practiceInstruction,
         replyStyle,
         exemplarBlock,
         `Question context:\n${questionBlock}`,
         `Post:\n${postBlock}`,
         replyToBlock,
-        'Give a hint and point to the relevant concept. Do not solve it fully.',
       ]
         .filter(Boolean)
         .join('\n\n');

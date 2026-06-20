@@ -1,8 +1,19 @@
 import { Body, Controller, Delete, Get, Param, Put } from '@nestjs/common';
 import { AppConfigService } from './app-config.service';
 
+const ALLOWED_KEYS = new Set([
+  'core_prompt',
+  'core_info',
+  'reply_style',
+  'refine_prompt',
+  'prompt:assignment',
+  'prompt:practice',
+  'taste',
+  'reply_taste',
+]);
+
 function isAllowed(key: string): boolean {
-  if (['core_prompt', 'taste', 'core_info', 'reply_taste'].includes(key)) return true;
+  if (ALLOWED_KEYS.has(key)) return true;
   return /^knowledge:[a-z0-9_-]+$/.test(key);
 }
 

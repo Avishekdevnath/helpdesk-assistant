@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
 
 export class GenerateReplyDto {
   @IsString()
@@ -20,4 +20,8 @@ export class GenerateReplyDto {
   @IsOptional()
   @IsString()
   replyToText?: string;
+
+  @IsOptional()
+  @IsIn(['en', 'original'])
+  replyLanguage?: 'en' | 'original';
 }

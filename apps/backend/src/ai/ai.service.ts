@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import type { GenerateReplyResponse } from '@helpdesk/shared-types';
@@ -6,7 +6,16 @@ import { AppConfigService } from '../app-config/app-config.service';
 import { KbService } from '../kb/kb.service';
 import { QuestionsService } from '../questions/questions.service';
 import { GenerateReplyDto } from './dto/generate-reply.dto';
-import { buildPrompt, buildRefinePrompt, decideMode } from './prompts';
+import {
+  buildPrompt,
+  buildRefinePrompt,
+  decideMode,
+  DEFAULT_IDENTITY,
+  DEFAULT_REPLY_STYLE,
+  DEFAULT_ASSIGNMENT_INSTRUCTION,
+  DEFAULT_PRACTICE_INSTRUCTION,
+  DEFAULT_REFINE_INSTRUCTIONS,
+} from './prompts';
 
 function toPlainText(reply: string): string {
   return reply
@@ -19,8 +28,16 @@ function toPlainText(reply: string): string {
     .trim();
 }
 
+const PROMPT_DEFAULTS: Record<string, string> = {
+  core_prompt: DEFAULT_IDENTITY,
+  reply_style: DEFAULT_REPLY_STYLE,
+  'prompt:assignment': DEFAULT_ASSIGNMENT_INSTRUCTION,
+  'prompt:practice': DEFAULT_PRACTICE_INSTRUCTION,
+  refine_prompt: DEFAULT_REFINE_INSTRUCTIONS,
+};
+
 @Injectable()
-export class AiService {
+export class AiService implements OnModuleInit {
   private readonly client: OpenAI;
 
   constructor(
@@ -34,13 +51,37 @@ export class AiService {
     this.client = new OpenAI({ apiKey });
   }
 
+  async onModuleInit() {
+    for (const [key, defaultValue] of Object.entries(PROMPT_DEFAULTS)) {
+      const existing = await this.appConfig.get(key);
+      if (!existing) {
+        await this.appConfig.set(key, defaultValue);
+      }
+    }
+  }
+
   async generateReply(dto: GenerateReplyDto): Promise<GenerateReplyResponse> {
     const query = `${dto.postTitle}\n${dto.postBody}`;
-    const [kbHits, questionHits, coreInfo, taste] = await Promise.all([
+    const [
+      kbHits,
+      questionHits,
+      identity,
+      coreInfo,
+      replyStyle,
+      taste,
+      refineInstructions,
+      assignmentInstruction,
+      practiceInstruction,
+    ] = await Promise.all([
       this.kb.search(query, 5),
       this.questions.searchForPost(query, 3),
+      this.appConfig.get('core_prompt'),
       this.appConfig.get('core_info'),
-      this.appConfig.get('reply_taste'),
+      this.appConfig.get('reply_style'),
+      this.appConfig.get('taste'),
+      this.appConfig.get('refine_prompt'),
+      this.appConfig.get('prompt:assignment'),
+      this.appConfig.get('prompt:practice'),
     ]);
     const mode = decideMode(questionHits);
 
@@ -66,6 +107,13 @@ export class AiService {
       replyTo,
       coreInfo || undefined,
       taste || undefined,
+      {
+        identity: identity || undefined,
+        replyStyle: replyStyle || undefined,
+        assignmentInstruction: assignmentInstruction || undefined,
+        practiceInstruction: practiceInstruction || undefined,
+        replyLanguage: dto.replyLanguage ?? 'en',
+      },
     );
 
     const draftResponse = await this.client.chat.completions.create({
@@ -79,7 +127,7 @@ export class AiService {
     }
 
     const studentPost = `${dto.postTitle}\n${dto.postBody}`;
-    const refinePrompt = buildRefinePrompt(draft, studentPost, taste || undefined);
+    const refinePrompt = buildRefinePrompt(draft, studentPost, taste || undefined, refineInstructions || undefined, dto.replyLanguage ?? 'en');
     const refineResponse = await this.client.chat.completions.create({
       model: 'gpt-4o-mini',
       max_tokens: 1024,
