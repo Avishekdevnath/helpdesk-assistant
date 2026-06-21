@@ -28,6 +28,14 @@ function toPlainText(reply: string): string {
     .trim();
 }
 
+function buildDraftContent(prompt: string, screenshots: string[]) {
+  if (!screenshots.length) return prompt;
+  return [
+    { type: 'text', text: prompt },
+    ...screenshots.map((url) => ({ type: 'image_url', image_url: { url, detail: 'high' } })),
+  ];
+}
+
 const PROMPT_DEFAULTS: Record<string, string> = {
   core_prompt: DEFAULT_IDENTITY,
   reply_style: DEFAULT_REPLY_STYLE,
@@ -116,10 +124,11 @@ export class AiService implements OnModuleInit {
       },
     );
 
+    const screenshots = (dto.screenshots ?? []).filter((url) => typeof url === 'string' && url.trim());
     const draftResponse = await this.client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: screenshots.length ? 'gpt-4o' : 'gpt-4o-mini',
       max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: buildDraftContent(prompt, screenshots) as any }],
     });
     const draft = draftResponse.choices?.[0]?.message?.content;
     if (!draft) {

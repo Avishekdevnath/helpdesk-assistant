@@ -36,6 +36,7 @@ export interface GenerateReplyRequest {
   replyToAuthor?: string;
   replyToText?: string;
   replyLanguage?: 'en' | 'bn' | 'original';
+  screenshots?: string[];
 }
 
 export interface GenerateReplyResponse {

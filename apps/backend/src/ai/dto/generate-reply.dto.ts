@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
 
 export class GenerateReplyDto {
   @IsString()
@@ -24,4 +24,10 @@ export class GenerateReplyDto {
   @IsOptional()
   @IsIn(['en', 'bn', 'original'])
   replyLanguage?: 'en' | 'bn' | 'original';
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  screenshots?: string[];
 }

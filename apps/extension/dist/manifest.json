@@ -26,7 +26,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.tsx-BKPYY8Vf.js"
+        "assets/index.tsx-Df33BGhd.js"
       ],
       "matches": [
         "https://helpdesk.phitron.io/*"
@@ -49,7 +49,7 @@
         "https://helpdesk.phitron.io/*"
       ],
       "resources": [
-        "assets/index.tsx-BKPYY8Vf.js"
+        "assets/index.tsx-Df33BGhd.js"
       ],
       "use_dynamic_url": false
     }
