@@ -27,7 +27,7 @@ export class GenerateReplyDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(6)
+  @ArrayMaxSize(1)
   @IsString({ each: true })
   screenshots?: string[];
 }

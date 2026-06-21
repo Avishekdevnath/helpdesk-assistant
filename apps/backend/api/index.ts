@@ -3,14 +3,16 @@ import type { Request, Response } from 'express';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
-import express from 'express';
+import express, { json, urlencoded } from 'express';
 import { AppModule } from '../src/app.module';
 
 let cached: express.Express | null = null;
 
 async function build() {
   const expressApp = express();
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), { cors: true });
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), { cors: true, bodyParser: false });
+  app.use(json({ limit: '4mb' }));
+  app.use(urlencoded({ extended: true, limit: '4mb' }));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
