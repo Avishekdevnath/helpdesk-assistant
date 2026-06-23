@@ -8,7 +8,7 @@ import { AppConfigService } from '../app-config/app-config.service';
 describe('AiService', () => {
   const kb = { search: jest.fn() };
   const questions = { search: jest.fn(), searchForPost: jest.fn() };
-  const appConfig = { get: jest.fn() };
+  const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
   const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
 
   let service: AiService;
@@ -17,6 +17,7 @@ describe('AiService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     appConfig.get.mockResolvedValue('');
+    appConfig.listByPrefix.mockResolvedValue([]);
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
@@ -101,5 +102,98 @@ describe('AiService', () => {
         }),
       ],
     }));
+  });
+});
+
+describe('ask', () => {
+  const kb = { search: jest.fn(), searchForPost: jest.fn() };
+  const questions = { search: jest.fn(), searchForPost: jest.fn() };
+  const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
+  const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
+
+  let service: AiService;
+  let chatCreate: jest.Mock;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    appConfig.get.mockResolvedValue('');
+    appConfig.listByPrefix.mockResolvedValue([]);
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        AiService,
+        { provide: KbService, useValue: kb },
+        { provide: QuestionsService, useValue: questions },
+        { provide: AppConfigService, useValue: appConfig },
+        { provide: ConfigService, useValue: config },
+      ],
+    }).compile();
+    service = moduleRef.get(AiService);
+    chatCreate = jest.fn().mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+    (service as unknown as { client: unknown }).client = {
+      chat: { completions: { create: chatCreate } },
+    };
+  });
+
+  it('answers from internal KB without web when KB has hits', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'Refunds', body: 'No refund after 7 days.' }]);
+    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'No refund after 7 days.' } }] });
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'refund policy?' }] });
+
+    expect(res.usedWeb).toBe(false);
+    expect(res.answer).toBe('No refund after 7 days.');
+    expect(res.sources.kb).toEqual([{ id: 'k1', title: 'Refunds' }]);
+    expect(chatCreate).toHaveBeenCalledTimes(1);
+    expect(chatCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o-mini' }));
+  });
+
+  it('falls back to web search when KB has zero hits', async () => {
+    kb.search.mockResolvedValue([]);
+    chatCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: 'According to the web, ...',
+          annotations: [{ type: 'url_citation', url_citation: { url: 'https://x.test', title: 'X' } }],
+        },
+      }],
+    });
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'obscure thing?' }] });
+
+    expect(res.usedWeb).toBe(true);
+    expect(res.sources.web).toEqual([{ title: 'X', url: 'https://x.test' }]);
+    expect(chatCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-mini-search-preview', web_search_options: {} }),
+    );
+  });
+
+  it('condenses multi-turn history before retrieval', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'Exam', body: 'June 30.' }]);
+    chatCreate
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'When is the C exam for batch 2026?' } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'June 30.' } }] });
+
+    await service.ask({
+      messages: [
+        { role: 'user', content: 'When is the C exam?' },
+        { role: 'assistant', content: 'June 30.' },
+        { role: 'user', content: 'what about batch 2026?' },
+      ],
+    });
+
+    expect(kb.search).toHaveBeenCalledWith('When is the C exam for batch 2026?', 6);
+    expect(chatCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks usedCoreInfo and includes doc slugs in sources', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    appConfig.get.mockImplementation((k: string) => Promise.resolve(k === 'core_info' ? 'org facts' : ''));
+    appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:policies', value: 'Refund window 7 days.' }]);
+    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'refund?' }] });
+
+    expect(res.sources.usedCoreInfo).toBe(true);
+    expect(res.sources.docs).toEqual(['policies']);
   });
 });

@@ -1,7 +1,7 @@
 import { Injectable, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
-import type { GenerateReplyResponse } from '@helpdesk/shared-types';
+import type { GenerateReplyResponse, AskRequest, AskResponse } from '@helpdesk/shared-types';
 import { AppConfigService } from '../app-config/app-config.service';
 import { KbService } from '../kb/kb.service';
 import { QuestionsService } from '../questions/questions.service';
@@ -9,6 +9,8 @@ import { GenerateReplyDto } from './dto/generate-reply.dto';
 import {
   buildPrompt,
   buildRefinePrompt,
+  buildAskPrompt,
+  buildCondensePrompt,
   decideMode,
   DEFAULT_IDENTITY,
   DEFAULT_REPLY_STYLE,
@@ -43,6 +45,8 @@ const PROMPT_DEFAULTS: Record<string, string> = {
   'prompt:practice': DEFAULT_PRACTICE_INSTRUCTION,
   refine_prompt: DEFAULT_REFINE_INSTRUCTIONS,
 };
+
+const DOCS_CHAR_CAP = 6000;
 
 @Injectable()
 export class AiService implements OnModuleInit {
@@ -149,6 +153,120 @@ export class AiService implements OnModuleInit {
       reply: toPlainText(refined),
       kbHits: kbHits.map((entry) => ({ id: entry.id, title: entry.title })),
       questionHits: questionHits.map((entry) => ({ id: entry.id, questionText: entry.questionText })),
+    };
+  }
+
+  private rankDocs(
+    docs: { slug: string; value: string }[],
+    query: string,
+  ): { slug: string; value: string }[] {
+    const total = docs.reduce((n, d) => n + d.value.length, 0);
+    if (total <= DOCS_CHAR_CAP) return docs;
+    const terms = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    const scored = docs
+      .map((d) => {
+        const text = d.value.toLowerCase();
+        const score = terms.reduce((n, t) => (text.includes(t) ? n + 1 : n), 0);
+        return { d, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    const picked: { slug: string; value: string }[] = [];
+    let used = 0;
+    for (const { d } of scored) {
+      if (used + d.value.length > DOCS_CHAR_CAP) continue;
+      picked.push(d);
+      used += d.value.length;
+    }
+    return picked;
+  }
+
+  async ask(req: AskRequest): Promise<AskResponse> {
+    const messages = req.messages ?? [];
+    const last = [...messages].reverse().find((m) => m.role === 'user');
+    const latest = last?.content ?? '';
+
+    // 1. Condense multi-turn history into a standalone retrieval query.
+    let query = latest;
+    if (messages.length > 1) {
+      const condensed = await this.client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 128,
+        messages: [{ role: 'user', content: buildCondensePrompt(messages) }],
+      });
+      query = condensed.choices?.[0]?.message?.content?.trim() || latest;
+    }
+
+    // 2. Retrieve internal sources in parallel.
+    const [kbHits, coreInfo, docRows] = await Promise.all([
+      this.kb.search(query, 6),
+      this.appConfig.get('core_info'),
+      this.appConfig.listByPrefix('knowledge:'),
+    ]);
+    const docs = this.rankDocs(
+      docRows.map((r) => ({ slug: r.key.replace('knowledge:', ''), value: r.value })),
+      query,
+    );
+
+    const baseSources = {
+      kb: kbHits.map((h) => ({ id: h.id, title: h.title })),
+      docs: docs.map((d) => d.slug),
+      usedCoreInfo: !!(coreInfo && coreInfo.trim()),
+      web: [] as { title: string; url: string }[],
+    };
+
+    // 3. Web fallback ONLY when KB has zero hits.
+    if (kbHits.length === 0) {
+      const webRes = await this.client.chat.completions.create({
+        model: 'gpt-4o-mini-search-preview',
+        web_search_options: {},
+        messages: [
+          {
+            role: 'user',
+            content: buildAskPrompt({
+              query,
+              history: messages,
+              kb: [],
+              coreInfo: coreInfo || undefined,
+              docs,
+              replyLanguage: req.replyLanguage,
+            }),
+          },
+        ],
+      } as any);
+      const msg = webRes.choices?.[0]?.message as any;
+      const web = (msg?.annotations ?? [])
+        .filter((a: any) => a.type === 'url_citation' && a.url_citation)
+        .map((a: any) => ({ title: a.url_citation.title ?? a.url_citation.url, url: a.url_citation.url }));
+      return {
+        answer: msg?.content ?? 'No information found.',
+        usedWeb: true,
+        sources: { ...baseSources, web },
+      };
+    }
+
+    // 4. Compose grounded answer from internal context.
+    const compose = await this.client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: buildAskPrompt({
+            query,
+            history: messages,
+            kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
+            coreInfo: coreInfo || undefined,
+            docs,
+            replyLanguage: req.replyLanguage,
+          }),
+        },
+      ],
+    });
+
+    return {
+      answer: compose.choices?.[0]?.message?.content ?? 'No information found.',
+      usedWeb: false,
+      sources: baseSources,
     };
   }
 }
