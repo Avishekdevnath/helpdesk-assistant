@@ -1,4 +1,4 @@
-import { buildPrompt, decideMode } from './prompts';
+import { buildPrompt, decideMode, buildCondensePrompt, buildAskPrompt } from './prompts';
 
 describe('AI prompts', () => {
   it('uses full_answer when no question hits exist', () => {
@@ -75,5 +75,41 @@ describe('buildPrompt exemplars', () => {
       [],
     );
     expect(prompt).not.toContain('Exemplar');
+  });
+});
+
+describe('buildCondensePrompt', () => {
+  it('includes prior turns and asks for a standalone question', () => {
+    const out = buildCondensePrompt([
+      { role: 'user', content: 'When is the C exam?' },
+      { role: 'assistant', content: 'June 30.' },
+      { role: 'user', content: 'what about batch 2026?' },
+    ]);
+    expect(out).toContain('standalone');
+    expect(out).toContain('what about batch 2026?');
+    expect(out).toContain('When is the C exam?');
+  });
+});
+
+describe('buildAskPrompt', () => {
+  it('embeds KB, core info and docs, and forbids fabrication', () => {
+    const out = buildAskPrompt({
+      query: 'refund policy?',
+      history: [{ role: 'user', content: 'refund policy?' }],
+      kb: [{ title: 'Refunds', body: 'No refund after 7 days.', moderatorAnswer: 'No refund after 7 days.' }],
+      coreInfo: 'Phitron is a Bangladeshi edutech.',
+      docs: [{ slug: 'policies', value: 'Refund window is 7 days.' }],
+      replyLanguage: 'en',
+    });
+    expect(out).toContain('Refunds');
+    expect(out).toContain('No refund after 7 days.');
+    expect(out).toContain('Phitron is a Bangladeshi edutech.');
+    expect(out).toContain('Refund window is 7 days.');
+    expect(out.toLowerCase()).toContain('do not');
+  });
+
+  it('says no internal context when nothing retrieved', () => {
+    const out = buildAskPrompt({ query: 'x', history: [{ role: 'user', content: 'x' }], kb: [], docs: [] });
+    expect(out).toContain('(no internal context)');
   });
 });

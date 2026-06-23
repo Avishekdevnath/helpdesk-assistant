@@ -13,9 +13,15 @@ describeIfDb('AI (e2e)', () => {
   beforeAll(async () => {
     ({ app, prisma } = await bootTestApp());
     const ai = app.get(AiService);
+    // generateReply calls client.chat.completions.create twice (draft + refine),
+    // each reading choices[0].message.content.
     (ai as unknown as { client: unknown }).client = {
-      responses: {
-        create: jest.fn().mockResolvedValue({ output_text: 'mocked reply' }),
+      chat: {
+        completions: {
+          create: jest
+            .fn()
+            .mockResolvedValue({ choices: [{ message: { content: 'mocked reply' } }] }),
+        },
       },
     };
   });

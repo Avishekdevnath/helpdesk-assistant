@@ -9,7 +9,6 @@ const ALLOWED_KEYS = new Set([
   'prompt:assignment',
   'prompt:practice',
   'taste',
-  'reply_taste',
 ]);
 
 function isAllowed(key: string): boolean {

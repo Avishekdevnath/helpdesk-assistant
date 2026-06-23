@@ -13,6 +13,13 @@ interface ScrapData {
   course?: string;
   batch?: string;
   fullContent?: string;
+  // Optional explicit fields for manual creates (raw write, no AI gate).
+  // When omitted, moderatorAnswer is derived from the discussion.
+  moderatorAnswer?: string;
+  moderatorVoice?: string;
+  summary?: string;
+  category?: string;
+  tags?: string[];
 }
 
 interface ExtractInput {
@@ -76,8 +83,13 @@ export class KbService {
   }
 
   async scrapPost(data: ScrapData) {
-    const moderatorAnswer = this.extractModeratorAnswer(data.discussion ?? []);
-    const embedText = `${data.title}\n${data.body}`;
+    // Explicit answer (manual create) wins; otherwise pull from the thread.
+    const moderatorAnswer =
+      data.moderatorAnswer?.trim() || this.extractModeratorAnswer(data.discussion ?? []);
+    // Embed the user-supplied answer/summary too so manual entries are findable.
+    const embedText = [data.title, data.body, moderatorAnswer ?? '', data.summary ?? '']
+      .filter(Boolean)
+      .join('\n');
 
     // Embed in parallel with DB write — DB write never blocked by OpenAI
     const fields = {
@@ -88,6 +100,12 @@ export class KbService {
       batch: data.batch,
       rawContent: data.fullContent,
       moderatorAnswer,
+      moderatorVoice: data.moderatorVoice,
+      summary: data.summary,
+      category: data.category,
+      // Leave undefined when absent: create falls back to schema default [],
+      // update is a no-op so an existing post's tags aren't wiped on re-scrape.
+      tags: data.tags,
       metadata: {} as Prisma.InputJsonValue,
     };
     const [post, vec] = await Promise.allSettled([

@@ -75,6 +75,67 @@ export interface KbHit {
   summary?: string | null;
 }
 
+export function buildCondensePrompt(
+  messages: { role: string; content: string }[],
+): string {
+  const history = messages
+    .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'Moderator'}: ${m.content}`)
+    .join('\n');
+  return [
+    'Given the conversation below, rewrite the LAST moderator message into a single',
+    'standalone search question that captures any context from earlier turns.',
+    'Return ONLY the rewritten question, nothing else.',
+    '',
+    history,
+  ].join('\n');
+}
+
+export function buildAskPrompt(input: {
+  query: string;
+  history: { role: string; content: string }[];
+  kb: { title: string; body: string; moderatorAnswer?: string | null }[];
+  coreInfo?: string;
+  docs: { slug: string; value: string }[];
+  replyLanguage?: 'en' | 'bn' | 'original';
+}): string {
+  const languageBlock =
+    input.replyLanguage === 'bn'
+      ? 'Answer in Bengali (বাংলা).'
+      : input.replyLanguage === 'original'
+        ? "Answer in the moderator's language."
+        : 'Answer in English.';
+
+  const kbBlock = input.kb.length
+    ? input.kb
+        .map((e) => `### ${e.title}\n${e.body}${e.moderatorAnswer ? `\nAnswer: ${e.moderatorAnswer}` : ''}`)
+        .join('\n\n')
+    : null;
+  const coreBlock = input.coreInfo?.trim() ? `Core info:\n${input.coreInfo.trim()}` : null;
+  const docsBlock = input.docs.length
+    ? input.docs.map((d) => `[doc:${d.slug}]\n${d.value}`).join('\n\n')
+    : null;
+  const internal = [kbBlock, coreBlock, docsBlock].filter(Boolean).join('\n\n') || '(no internal context)';
+
+  const history = input.history
+    .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'Moderator'}: ${m.content}`)
+    .join('\n');
+
+  return [
+    'You help a helpdesk moderator find correct internal information.',
+    languageBlock,
+    'Rules:',
+    '- Answer ONLY from the internal context below. Do NOT invent facts.',
+    '- Cite which sources you used by title or [doc:slug].',
+    '- If the answer is not in the context, say plainly it is not confirmed in internal sources.',
+    '',
+    `Internal context:\n${internal}`,
+    '',
+    `Conversation:\n${history}`,
+    '',
+    `Answer this question: ${input.query}`,
+  ].join('\n');
+}
+
 export function decideMode(questionHits: Pick<QuestionEntry, 'type'>[]): ReplyMode {
   if (questionHits.length === 0) return 'full_answer';
   return questionHits[0].type === 'assignment' ? 'hint_assignment' : 'hint_practice';

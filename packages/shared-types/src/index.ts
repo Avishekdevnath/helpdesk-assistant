@@ -45,3 +45,26 @@ export interface GenerateReplyResponse {
   kbHits: { id: string; title: string }[];
   questionHits: { id: string; questionText: string }[];
 }
+
+export interface AskMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AskRequest {
+  messages: AskMessage[];
+  replyLanguage?: 'en' | 'bn' | 'original';
+}
+
+export interface AskSources {
+  kb: { id: string; title: string }[];
+  docs: string[];
+  usedCoreInfo: boolean;
+  web: { title: string; url: string }[];
+}
+
+export interface AskResponse {
+  answer: string;
+  usedWeb: boolean;
+  sources: AskSources;
+}

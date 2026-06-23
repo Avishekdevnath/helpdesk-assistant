@@ -9,6 +9,11 @@ interface ScrapPostDto {
   course?: string;
   batch?: string;
   fullContent?: string;
+  moderatorAnswer?: string;
+  moderatorVoice?: string;
+  summary?: string;
+  category?: string;
+  tags?: string[];
 }
 
 interface FromPostDto {
