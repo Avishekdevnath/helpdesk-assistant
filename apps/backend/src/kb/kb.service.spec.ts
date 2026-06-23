@@ -4,13 +4,13 @@ import { EmbeddingService } from './embedding.service';
 const mockEmbed = jest.fn().mockResolvedValue(new Array(1536).fill(0.1));
 const mockEmbeddingService = { embed: mockEmbed } as unknown as EmbeddingService;
 
-const mockCreate = jest.fn().mockResolvedValue({ id: 'abc', title: 'test', body: 'body' });
+const mockUpsert = jest.fn().mockResolvedValue({ id: 'abc', title: 'test', body: 'body' });
 const mockExecuteRaw = jest.fn().mockResolvedValue(1);
 const mockQueryRaw = jest.fn().mockResolvedValue([
   { id: 'abc', title: 'test', body: 'body', moderatorAnswer: 'answer', similarity: 0.9 },
 ]);
 const mockPrisma = {
-  kbPost: { create: mockCreate, findMany: jest.fn().mockResolvedValue([]) },
+  kbPost: { upsert: mockUpsert, findMany: jest.fn().mockResolvedValue([]) },
   $executeRaw: mockExecuteRaw,
   $queryRaw: mockQueryRaw,
 } as any;
@@ -35,8 +35,8 @@ describe('KbService', () => {
       url: 'https://example.com',
     });
     expect(mockEmbed).toHaveBeenCalled();
-    const createArg = mockCreate.mock.calls[0][0];
-    expect(createArg.data.moderatorAnswer).toBe('getchar reads one char');
+    const upsertArg = mockUpsert.mock.calls[0][0];
+    expect(upsertArg.create.moderatorAnswer).toBe('getchar reads one char');
   });
 
   it('returns empty array without throwing when no rows', async () => {

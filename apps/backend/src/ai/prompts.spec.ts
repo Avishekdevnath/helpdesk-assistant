@@ -21,7 +21,7 @@ describe('AI prompts', () => {
     expect(prompt).toContain('Do NOT solve it');
   });
 
-  it('asks for replies in a Bangla support style for simple posts', () => {
+  it('asks for replies in the Phitron English support style for simple posts', () => {
     const prompt = buildPrompt(
       'full_answer',
       { title: 'C++ Problem', body: 'getchar() ar cin.ignore() er difference ki?' },
@@ -29,7 +29,7 @@ describe('AI prompts', () => {
       [],
     );
 
-    expect(prompt).toContain('Bangla');
+    expect(prompt).toContain('ONLY in English');
     expect(prompt).toContain('Phitron');
     expect(prompt).toContain('simple student-friendly');
   });
