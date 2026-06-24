@@ -90,6 +90,38 @@ export function buildCondensePrompt(
   ].join('\n');
 }
 
+// System prompt for the grounded (internal-sources) Ask path. Hard rules go in
+// the system role so the model actually obeys them — and it is explicitly told
+// NOT to use any prior knowledge about Phitron, since the model recognises the
+// org name and will otherwise fabricate fees/dates/policies from training data.
+export function buildAskSystem(replyLanguage?: 'en' | 'bn' | 'original'): string {
+  const languageLine =
+    replyLanguage === 'bn'
+      ? 'Answer in Bengali (বাংলা).'
+      : replyLanguage === 'original'
+        ? "Answer in the moderator's language."
+        : 'Answer in English.';
+  return [
+    'You are a retrieval assistant for a helpdesk moderator.',
+    languageLine,
+    'STRICT RULES — follow exactly:',
+    '- Use ONLY the facts in the "Internal context" provided in the user message.',
+    '- You have NO prior knowledge. Ignore anything you may know about Phitron, its courses, fees, schedule, location, or staff. If a fact (fee, duration, dates, office hours, location, syllabus) is not written in the context, you do NOT know it.',
+    '- Never guess, infer, or fill gaps. Do not generalise from a job title or a name into a course or feature.',
+    '- If the context does not contain the answer, reply with exactly: "Not confirmed in internal sources." and nothing else (translated to the answer language).',
+    '- When you do answer, cite the sources you used by their title or [doc:slug].',
+  ].join('\n');
+}
+
+// System prompt for the web-search fallback path (used only when KB is empty).
+export const ASK_WEB_SYSTEM = [
+  'You are a research assistant for a helpdesk moderator.',
+  'Answer using the web search results available to you, plus any internal context provided.',
+  'Cite the web pages you used. If nothing reliable is found, say so plainly. Do not fabricate.',
+].join('\n');
+
+// Builds the USER message: internal context + conversation + the question.
+// Rules live in the system prompt (buildAskSystem / ASK_WEB_SYSTEM), not here.
 export function buildAskPrompt(input: {
   query: string;
   history: { role: string; content: string }[];
@@ -98,13 +130,6 @@ export function buildAskPrompt(input: {
   docs: { slug: string; value: string }[];
   replyLanguage?: 'en' | 'bn' | 'original';
 }): string {
-  const languageBlock =
-    input.replyLanguage === 'bn'
-      ? 'Answer in Bengali (বাংলা).'
-      : input.replyLanguage === 'original'
-        ? "Answer in the moderator's language."
-        : 'Answer in English.';
-
   const kbBlock = input.kb.length
     ? input.kb
         .map((e) => `### ${e.title}\n${e.body}${e.moderatorAnswer ? `\nAnswer: ${e.moderatorAnswer}` : ''}`)
@@ -121,18 +146,11 @@ export function buildAskPrompt(input: {
     .join('\n');
 
   return [
-    'You help a helpdesk moderator find correct internal information.',
-    languageBlock,
-    'Rules:',
-    '- Answer ONLY from the internal context below. Do NOT invent facts.',
-    '- Cite which sources you used by title or [doc:slug].',
-    '- If the answer is not in the context, say plainly it is not confirmed in internal sources.',
-    '',
     `Internal context:\n${internal}`,
     '',
     `Conversation:\n${history}`,
     '',
-    `Answer this question: ${input.query}`,
+    `Answer this question using only the internal context above: ${input.query}`,
   ].join('\n');
 }
 

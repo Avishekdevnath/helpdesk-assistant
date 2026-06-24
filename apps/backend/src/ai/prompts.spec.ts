@@ -1,4 +1,4 @@
-import { buildPrompt, decideMode, buildCondensePrompt, buildAskPrompt } from './prompts';
+import { buildPrompt, decideMode, buildCondensePrompt, buildAskPrompt, buildAskSystem } from './prompts';
 
 describe('AI prompts', () => {
   it('uses full_answer when no question hits exist', () => {
@@ -105,7 +105,13 @@ describe('buildAskPrompt', () => {
     expect(out).toContain('No refund after 7 days.');
     expect(out).toContain('Phitron is a Bangladeshi edutech.');
     expect(out).toContain('Refund window is 7 days.');
-    expect(out.toLowerCase()).toContain('do not');
+    expect(out.toLowerCase()).toContain('only the internal context');
+  });
+
+  it('system prompt forbids prior knowledge and sets a refusal string', () => {
+    const sys = buildAskSystem('en');
+    expect(sys.toLowerCase()).toContain('no prior knowledge');
+    expect(sys).toContain('Not confirmed in internal sources.');
   });
 
   it('says no internal context when nothing retrieved', () => {

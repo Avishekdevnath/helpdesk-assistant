@@ -144,7 +144,7 @@ describe('ask', () => {
     expect(res.answer).toBe('No refund after 7 days.');
     expect(res.sources.kb).toEqual([{ id: 'k1', title: 'Refunds' }]);
     expect(chatCreate).toHaveBeenCalledTimes(1);
-    expect(chatCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o-mini' }));
+    expect(chatCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o' }));
   });
 
   it('falls back to web search when KB has zero hits', async () => {
@@ -195,5 +195,24 @@ describe('ask', () => {
 
     expect(res.sources.usedCoreInfo).toBe(true);
     expect(res.sources.docs).toEqual(['policies']);
+  });
+
+  it('still retrieves a knowledge doc larger than the char cap (no silent drop)', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    appConfig.get.mockResolvedValue('');
+    // ~25k-char doc, well over DOCS_CHAR_CAP, with the answer in one section.
+    const bigDoc = [
+      '## Intro\n' + 'x'.repeat(12000),
+      '## Course duration\nThe CS fundamentals course takes about 10-12 months.',
+      '## Contact\n' + 'y'.repeat(12000),
+    ].join('\n');
+    appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:cs-fundamentals', value: bigDoc }]);
+    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+
+    await service.ask({ messages: [{ role: 'user', content: 'how long is the course duration?' }] });
+
+    const userMsg = chatCreate.mock.calls[0][0].messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).toContain('10-12 months');
+    expect(userMsg).toContain('[doc:cs-fundamentals]');
   });
 });

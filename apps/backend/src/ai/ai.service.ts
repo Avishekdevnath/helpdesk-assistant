@@ -10,6 +10,8 @@ import {
   buildPrompt,
   buildRefinePrompt,
   buildAskPrompt,
+  buildAskSystem,
+  ASK_WEB_SYSTEM,
   buildCondensePrompt,
   decideMode,
   DEFAULT_IDENTITY,
@@ -46,7 +48,7 @@ const PROMPT_DEFAULTS: Record<string, string> = {
   refine_prompt: DEFAULT_REFINE_INSTRUCTIONS,
 };
 
-const DOCS_CHAR_CAP = 6000;
+const DOCS_CHAR_CAP = 12000;
 
 @Injectable()
 export class AiService implements OnModuleInit {
@@ -156,28 +158,55 @@ export class AiService implements OnModuleInit {
     };
   }
 
+  // Split a knowledge doc into section-sized chunks (by markdown heading or
+  // Q/A block) so a large doc can be partially retrieved instead of dropped.
+  private chunkDoc(value: string): string[] {
+    const parts = value
+      .split(/\n(?=#{1,4}\s|\*\*Q[:.]?|\bQ:)/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return parts.length ? parts : [value];
+  }
+
   private rankDocs(
     docs: { slug: string; value: string }[],
     query: string,
   ): { slug: string; value: string }[] {
     const total = docs.reduce((n, d) => n + d.value.length, 0);
     if (total <= DOCS_CHAR_CAP) return docs;
+
     const terms = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-    const scored = docs
-      .map((d) => {
-        const text = d.value.toLowerCase();
-        const score = terms.reduce((n, t) => (text.includes(t) ? n + 1 : n), 0);
-        return { d, score };
-      })
+    const scoreOf = (text: string) => {
+      const lc = text.toLowerCase();
+      return terms.reduce((n, t) => (lc.includes(t) ? n + 1 : n), 0);
+    };
+
+    // Rank every chunk across all docs, then fill the budget with the most
+    // relevant chunks — truncating the final chunk to fit rather than skipping.
+    const chunks = docs
+      .flatMap((d) => this.chunkDoc(d.value).map((text) => ({ slug: d.slug, text })))
+      .map((c) => ({ ...c, score: scoreOf(c.text) }))
       .sort((a, b) => b.score - a.score);
-    const picked: { slug: string; value: string }[] = [];
+
+    const bySlug = new Map<string, string[]>();
     let used = 0;
-    for (const { d } of scored) {
-      if (used + d.value.length > DOCS_CHAR_CAP) continue;
-      picked.push(d);
-      used += d.value.length;
+    for (const c of chunks) {
+      if (used >= DOCS_CHAR_CAP) break;
+      const slice = c.text.slice(0, DOCS_CHAR_CAP - used);
+      if (!slice) break;
+      const arr = bySlug.get(c.slug) ?? [];
+      arr.push(slice);
+      bySlug.set(c.slug, arr);
+      used += slice.length;
     }
-    return picked;
+
+    // Nothing matched the query terms — fall back to the head of each doc so the
+    // model still has something rather than empty context.
+    if (used === 0) {
+      const per = Math.floor(DOCS_CHAR_CAP / docs.length);
+      return docs.map((d) => ({ slug: d.slug, value: d.value.slice(0, per) }));
+    }
+    return [...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') }));
   }
 
   async ask(req: AskRequest): Promise<AskResponse> {
@@ -220,6 +249,7 @@ export class AiService implements OnModuleInit {
         model: 'gpt-4o-mini-search-preview',
         web_search_options: {},
         messages: [
+          { role: 'system', content: ASK_WEB_SYSTEM },
           {
             role: 'user',
             content: buildAskPrompt({
@@ -246,9 +276,10 @@ export class AiService implements OnModuleInit {
 
     // 4. Compose grounded answer from internal context.
     const compose = await this.client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       max_tokens: 1024,
       messages: [
+        { role: 'system', content: buildAskSystem(req.replyLanguage) },
         {
           role: 'user',
           content: buildAskPrompt({
