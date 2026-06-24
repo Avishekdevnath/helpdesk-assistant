@@ -33,24 +33,23 @@ export class KnowledgeDocsService {
     const hash = sha256(value);
     const chunks = chunkDoc(value);
 
-    let vectors: number[][];
     try {
-      vectors = await Promise.all(chunks.map((c) => this.embedding.embed(c)));
+      const vectors = await Promise.all(chunks.map((c) => this.embedding.embed(c)));
+      await this.prisma.knowledgeDocChunk.deleteMany({ where: { docSlug: slug } });
+      for (let i = 0; i < chunks.length; i++) {
+        const row = await this.prisma.knowledgeDocChunk.create({
+          data: { docSlug: slug, chunkIndex: i, content: chunks[i], contentHash: hash },
+        });
+        const vector = `[${vectors[i].join(',')}]`;
+        await this.prisma.$executeRaw`
+          UPDATE knowledge_doc_chunks SET embedding = ${vector}::vector WHERE id = ${row.id}
+        `;
+      }
+      return { status: 'embedded', chunks: chunks.length };
     } catch {
+      // Embedding API or missing table (pre-migration) — surface, don't 500.
       return { status: 'failed', chunks: 0 };
     }
-
-    await this.prisma.knowledgeDocChunk.deleteMany({ where: { docSlug: slug } });
-    for (let i = 0; i < chunks.length; i++) {
-      const row = await this.prisma.knowledgeDocChunk.create({
-        data: { docSlug: slug, chunkIndex: i, content: chunks[i], contentHash: hash },
-      });
-      const vector = `[${vectors[i].join(',')}]`;
-      await this.prisma.$executeRaw`
-        UPDATE knowledge_doc_chunks SET embedding = ${vector}::vector WHERE id = ${row.id}
-      `;
-    }
-    return { status: 'embedded', chunks: chunks.length };
   }
 
   // Cosine top-k over doc chunks. Throws if pgvector is unavailable — callers
@@ -76,14 +75,20 @@ export class KnowledgeDocsService {
   }
 
   // Derive embed status by comparing the stored content hash to the live doc.
+  // Tolerant: if the chunks table is missing (migration not yet run) treat as
+  // 'none' rather than failing the whole config listing.
   async statusFor(slug: string, value: string): Promise<DocEmbedStatus> {
-    const rows = await this.prisma.knowledgeDocChunk.findMany({
-      where: { docSlug: slug },
-      select: { contentHash: true },
-      take: 1,
-    });
-    if (!rows.length) return 'none';
-    return rows[0].contentHash === sha256(value) ? 'embedded' : 'stale';
+    try {
+      const rows = await this.prisma.knowledgeDocChunk.findMany({
+        where: { docSlug: slug },
+        select: { contentHash: true },
+        take: 1,
+      });
+      if (!rows.length) return 'none';
+      return rows[0].contentHash === sha256(value) ? 'embedded' : 'stale';
+    } catch {
+      return 'none';
+    }
   }
 
   async deleteDoc(slug: string): Promise<void> {
