@@ -1,5 +1,6 @@
-import { Injectable, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import OpenAI from 'openai';
 import type { GenerateReplyResponse, AskRequest, AskResponse } from '@helpdesk/shared-types';
 import { AppConfigService } from '../app-config/app-config.service';
@@ -54,9 +55,22 @@ const PROMPT_DEFAULTS: Record<string, string> = {
 
 const DOCS_CHAR_CAP = 12000;
 
+// One-line summary for the catalog block: the doc's first heading (usually its
+// title), else its first real line. Lets the model say what each doc covers.
+function docSummary(value: string): string {
+  const lines = value.split('\n').map((l) => l.trim());
+  const heading = lines.find((l) => /^#{1,6}\s+/.test(l));
+  const firstText = lines.find(
+    (l) => l && !l.startsWith('#') && !l.startsWith('>') && !l.startsWith('---') && !l.startsWith('|'),
+  );
+  const raw = (heading?.replace(/^#{1,6}\s+/, '') || firstText || '').replace(/[*_`]/g, '').trim();
+  return raw.length > 120 ? `${raw.slice(0, 117)}…` : raw;
+}
+
 @Injectable()
 export class AiService implements OnModuleInit {
   private readonly client: OpenAI;
+  private readonly logger = new Logger(AiService.name);
 
   constructor(
     private readonly kb: KbService,
@@ -67,7 +81,9 @@ export class AiService implements OnModuleInit {
   ) {
     const apiKey = config.get<string>('OPENAI_API_KEY');
     if (!apiKey) throw new Error('OPENAI_API_KEY missing');
-    this.client = new OpenAI({ apiKey });
+    // timeout caps a hung request; maxRetries adds exponential backoff on
+    // network errors, 429s and 5xx (the SDK honours Retry-After).
+    this.client = new OpenAI({ apiKey, timeout: 60_000, maxRetries: 2 });
   }
 
   async onModuleInit() {
@@ -163,44 +179,67 @@ export class AiService implements OnModuleInit {
     };
   }
 
-  // Retrieve knowledge docs by vector top-k over their embedded chunks. Falls
-  // back to text ranking over the raw docs when nothing is embedded yet (or
-  // pgvector is unavailable), so un-embedded docs are never invisible.
+  // Retrieve knowledge docs. Embedded docs surface by vector top-k (position-
+  // independent). Docs with NO embedded chunks can't appear in vector results, so
+  // they're text-ranked separately and merged in — a stale/un-embedded doc is
+  // never silently invisible, yet irrelevant embedded docs don't flood context.
   private async retrieveDocs(
     query: string,
     docRows: { key: string; value: string }[],
   ): Promise<{ slug: string; value: string }[]> {
+    const slugOf = (r: { key: string }) => r.key.replace('knowledge:', '');
+
+    // a) Vector top-k over embedded chunks, packed into the char budget.
+    const vectorPacked: { slug: string; value: string }[] = [];
+    let used = 0;
     try {
       const hits = await this.knowledgeDocs.searchDocs(query, 6);
-      if (hits.length) {
-        const bySlug = new Map<string, string[]>();
-        let used = 0;
-        for (const h of hits) {
-          if (used >= DOCS_CHAR_CAP) break;
-          const slice = h.content.slice(0, DOCS_CHAR_CAP - used);
-          if (!slice) break;
-          const arr = bySlug.get(h.slug) ?? [];
-          arr.push(slice);
-          bySlug.set(h.slug, arr);
-          used += slice.length;
-        }
-        return [...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') }));
+      const bySlug = new Map<string, string[]>();
+      for (const h of hits) {
+        if (used >= DOCS_CHAR_CAP) break;
+        const slice = h.content.slice(0, DOCS_CHAR_CAP - used);
+        if (!slice) break;
+        const arr = bySlug.get(h.slug) ?? [];
+        arr.push(slice);
+        bySlug.set(h.slug, arr);
+        used += slice.length;
       }
+      vectorPacked.push(...[...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') })));
     } catch {
-      // pgvector unavailable — fall through to text ranking.
+      // pgvector unavailable — vectorPacked stays empty, text ranking takes over below.
     }
-    return this.rankDocs(
-      docRows.map((r) => ({ slug: r.key.replace('knowledge:', ''), value: r.value })),
-      query,
-    );
+
+    // b) Which docs are embedded? Un-embedded ones need a text-rank fallback.
+    let embedded = new Set<string>();
+    try {
+      embedded = new Set(await this.knowledgeDocs.embeddedSlugs());
+    } catch {
+      // no info — treat as nothing embedded.
+    }
+
+    // c) If vector + embedding info are both empty (fresh corpus or pgvector down)
+    //    rank ALL docs as a legacy fallback; otherwise only the un-embedded ones.
+    const blind = docRows.filter((r) => !embedded.has(slugOf(r)));
+    const toRank = vectorPacked.length === 0 && embedded.size === 0 ? docRows : blind;
+
+    const remaining = DOCS_CHAR_CAP - used;
+    const textRanked =
+      remaining > 0 && toRank.length
+        ? this.rankDocs(toRank.map((r) => ({ slug: slugOf(r), value: r.value })), query, remaining)
+        : [];
+
+    // d) Merge — vector hits first, then text-ranked docs not already present.
+    const seen = new Set(vectorPacked.map((d) => d.slug));
+    return [...vectorPacked, ...textRanked.filter((d) => !seen.has(d.slug))];
   }
 
   private rankDocs(
     docs: { slug: string; value: string }[],
     query: string,
+    cap: number = DOCS_CHAR_CAP,
   ): { slug: string; value: string }[] {
     const total = docs.reduce((n, d) => n + d.value.length, 0);
-    if (total <= DOCS_CHAR_CAP) return docs;
+    if (total <= cap) return docs;
 
     const terms = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
     const scoreOf = (text: string) => {
@@ -218,8 +257,8 @@ export class AiService implements OnModuleInit {
     const bySlug = new Map<string, string[]>();
     let used = 0;
     for (const c of chunks) {
-      if (used >= DOCS_CHAR_CAP) break;
-      const slice = c.text.slice(0, DOCS_CHAR_CAP - used);
+      if (used >= cap) break;
+      const slice = c.text.slice(0, cap - used);
       if (!slice) break;
       const arr = bySlug.get(c.slug) ?? [];
       arr.push(slice);
@@ -230,13 +269,22 @@ export class AiService implements OnModuleInit {
     // Nothing matched the query terms — fall back to the head of each doc so the
     // model still has something rather than empty context.
     if (used === 0) {
-      const per = Math.floor(DOCS_CHAR_CAP / docs.length);
+      const per = Math.floor(cap / docs.length);
       return docs.map((d) => ({ slug: d.slug, value: d.value.slice(0, per) }));
     }
     return [...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') }));
   }
 
   async ask(req: AskRequest): Promise<AskResponse> {
+    const startedAt = Date.now();
+    const trace = randomUUID().slice(0, 8);
+    let tokens = 0;
+    // Accumulate token usage across the refine/compose/web calls for cost logging.
+    const meter = <T extends { usage?: { total_tokens?: number } | null }>(res: T): T => {
+      tokens += res?.usage?.total_tokens ?? 0;
+      return res;
+    };
+
     const messages = req.messages ?? [];
     const last = [...messages].reverse().find((m) => m.role === 'user');
     const latest = last?.content ?? '';
@@ -246,11 +294,13 @@ export class AiService implements OnModuleInit {
     //    misspelled first question still retrieves correctly.
     let query = latest;
     if (latest.trim()) {
-      const condensed = await this.client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        max_tokens: 128,
-        messages: [{ role: 'user', content: buildCondensePrompt(messages) }],
-      });
+      const condensed = meter(
+        await this.client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          max_tokens: 128,
+          messages: [{ role: 'user', content: buildCondensePrompt(messages) }],
+        }),
+      );
       query = condensed.choices?.[0]?.message?.content?.trim() || latest;
     }
 
@@ -261,7 +311,10 @@ export class AiService implements OnModuleInit {
       this.appConfig.listByPrefix('knowledge:'),
     ]);
     const docs = await this.retrieveDocs(query, docRows);
-    const docCatalog = docRows.map((r) => r.key.replace('knowledge:', ''));
+    const docCatalog = docRows.map((r) => ({
+      slug: r.key.replace('knowledge:', ''),
+      summary: docSummary(r.value),
+    }));
 
     const baseSources = {
       kb: kbHits.map((h) => ({ id: h.id, title: h.title })),
@@ -270,51 +323,42 @@ export class AiService implements OnModuleInit {
       web: [] as { title: string; url: string }[],
     };
 
+    // One structured log line per ask — path taken, retrieval shape, latency, cost.
+    const finish = (path: 'grounded' | 'web' | 'refusal', res: AskResponse): AskResponse => {
+      this.logger.log(
+        JSON.stringify({
+          evt: 'ask',
+          trace,
+          path,
+          ms: Date.now() - startedAt,
+          tokens,
+          qChars: latest.length,
+          kbHits: kbHits.length,
+          kbTopSim: kbHits[0]?.similarity ?? null,
+          docs: docs.length,
+          usedCore: baseSources.usedCoreInfo,
+          lang: req.replyLanguage ?? 'en',
+        }),
+      );
+      return res;
+    };
+
     // 3. Compose a grounded answer from internal context FIRST. The model answers
     //    content questions and catalog questions ("what docs do you have") from the
     //    Available-internal-sources block, or returns NO_ANSWER_SENTINEL when the
     //    context genuinely cannot answer.
-    const compose = await this.client.chat.completions.create({
-      model: 'gpt-4o',
-      max_tokens: 1024,
-      messages: [
-        { role: 'system', content: buildAskSystem(req.replyLanguage) },
-        {
-          role: 'user',
-          content: buildAskPrompt({
-            query,
-            history: messages,
-            kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
-            coreInfo: coreInfo || undefined,
-            docs,
-            docCatalog,
-            replyLanguage: req.replyLanguage,
-          }),
-        },
-      ],
-    });
-    const grounded = compose.choices?.[0]?.message?.content?.trim() ?? '';
-    const internalAnswered = grounded !== '' && !grounded.includes(NO_ANSWER_SENTINEL);
-
-    // 4. Internal context answered — return it, no web leak.
-    if (internalAnswered) {
-      return { answer: grounded, usedWeb: false, sources: baseSources };
-    }
-
-    // 5. Internal context could not answer AND KB found nothing — try the web as a
-    //    last resort. (If KB had hits we trust the grounded refusal and skip web.)
-    if (kbHits.length === 0) {
-      const webRes = await this.client.chat.completions.create({
-        model: 'gpt-4o-mini-search-preview',
-        web_search_options: {},
+    const compose = meter(
+      await this.client.chat.completions.create({
+        model: 'gpt-4o',
+        max_tokens: 1024,
         messages: [
-          { role: 'system', content: ASK_WEB_SYSTEM },
+          { role: 'system', content: buildAskSystem(req.replyLanguage) },
           {
             role: 'user',
             content: buildAskPrompt({
               query,
               history: messages,
-              kb: [],
+              kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
               coreInfo: coreInfo || undefined,
               docs,
               docCatalog,
@@ -322,19 +366,52 @@ export class AiService implements OnModuleInit {
             }),
           },
         ],
-      } as any);
+      }),
+    );
+    const grounded = compose.choices?.[0]?.message?.content?.trim() ?? '';
+    const internalAnswered = grounded !== '' && !grounded.includes(NO_ANSWER_SENTINEL);
+
+    // 4. Internal context answered — return it, no web leak.
+    if (internalAnswered) {
+      return finish('grounded', { answer: grounded, usedWeb: false, sources: baseSources });
+    }
+
+    // 5. Internal context could not answer AND KB found nothing — try the web as a
+    //    last resort. (If KB had hits we trust the grounded refusal and skip web.)
+    if (kbHits.length === 0) {
+      const webRes = meter(
+        await this.client.chat.completions.create({
+          model: 'gpt-4o-mini-search-preview',
+          web_search_options: {},
+          messages: [
+            { role: 'system', content: ASK_WEB_SYSTEM },
+            {
+              role: 'user',
+              content: buildAskPrompt({
+                query,
+                history: messages,
+                kb: [],
+                coreInfo: coreInfo || undefined,
+                docs,
+                docCatalog,
+                replyLanguage: req.replyLanguage,
+              }),
+            },
+          ],
+        } as any),
+      );
       const msg = webRes.choices?.[0]?.message as any;
       const web = (msg?.annotations ?? [])
         .filter((a: any) => a.type === 'url_citation' && a.url_citation)
         .map((a: any) => ({ title: a.url_citation.title ?? a.url_citation.url, url: a.url_citation.url }));
-      return {
+      return finish('web', {
         answer: msg?.content ?? refusalText(req.replyLanguage),
         usedWeb: true,
         sources: { ...baseSources, web },
-      };
+      });
     }
 
     // 6. No internal answer, KB had hits but none sufficed — localized refusal.
-    return { answer: refusalText(req.replyLanguage), usedWeb: false, sources: baseSources };
+    return finish('refusal', { answer: refusalText(req.replyLanguage), usedWeb: false, sources: baseSources });
   }
 }

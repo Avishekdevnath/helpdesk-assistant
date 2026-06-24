@@ -1,7 +1,7 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import type { AskRequest } from '@helpdesk/shared-types';
 import { AiService } from './ai.service';
 import { GenerateReplyDto } from './dto/generate-reply.dto';
+import { AskRequestDto } from './dto/ask.dto';
 
 @Controller('ai')
 export class AiController {
@@ -13,7 +13,7 @@ export class AiController {
   }
 
   @Post('ask')
-  ask(@Body() body: AskRequest) {
-    return this.ai.ask(body);
+  ask(@Body() dto: AskRequestDto) {
+    return this.ai.ask(dto);
   }
 }

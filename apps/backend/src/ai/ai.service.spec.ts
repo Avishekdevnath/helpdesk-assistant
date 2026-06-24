@@ -11,7 +11,7 @@ describe('AiService', () => {
   const kb = { search: jest.fn() };
   const questions = { search: jest.fn(), searchForPost: jest.fn() };
   const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
-  const knowledgeDocs = { searchDocs: jest.fn() };
+  const knowledgeDocs = { searchDocs: jest.fn(), embeddedSlugs: jest.fn() };
   const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
 
   let service: AiService;
@@ -22,6 +22,7 @@ describe('AiService', () => {
     appConfig.get.mockResolvedValue('');
     appConfig.listByPrefix.mockResolvedValue([]);
     knowledgeDocs.searchDocs.mockResolvedValue([]);
+    knowledgeDocs.embeddedSlugs.mockResolvedValue([]);
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
@@ -114,7 +115,7 @@ describe('ask', () => {
   const kb = { search: jest.fn(), searchForPost: jest.fn() };
   const questions = { search: jest.fn(), searchForPost: jest.fn() };
   const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
-  const knowledgeDocs = { searchDocs: jest.fn() };
+  const knowledgeDocs = { searchDocs: jest.fn(), embeddedSlugs: jest.fn() };
   const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
 
   let service: AiService;
@@ -314,5 +315,37 @@ describe('ask', () => {
     const res = await service.ask({ messages: [{ role: 'user', content: 'refund?' }] });
 
     expect(res.sources.docs).toEqual(['policies']);
+  });
+
+  it('surfaces an un-embedded doc alongside vector hits (no blind spot)', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    // one doc embedded + matched by vector, a second doc NOT embedded at all
+    knowledgeDocs.searchDocs.mockResolvedValue([
+      { slug: 'cs-fundamentals', content: 'Course runs 10-12 months.', similarity: 0.7 },
+    ]);
+    knowledgeDocs.embeddedSlugs.mockResolvedValue(['cs-fundamentals']);
+    appConfig.listByPrefix.mockResolvedValue([
+      { key: 'knowledge:cs-fundamentals', value: '# CS\nCourse runs 10-12 months.' },
+      { key: 'knowledge:refund-policy', value: '# Refunds\nRefund window is 7 days.' },
+    ]);
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'refund window?' }] });
+
+    // vector doc + the un-embedded doc both present
+    expect(res.sources.docs).toEqual(expect.arrayContaining(['cs-fundamentals', 'refund-policy']));
+    const userMsg = composeCall().messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).toContain('[doc:refund-policy]');
+  });
+
+  it('includes per-doc summaries in the catalog block', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    appConfig.listByPrefix.mockResolvedValue([
+      { key: 'knowledge:cs-fundamentals', value: '# CSE Fundamentals with Phitron\nbody...' },
+    ]);
+
+    await service.ask({ messages: [{ role: 'user', content: 'hi' }] });
+
+    const userMsg = composeCall().messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).toContain('cs-fundamentals — CSE Fundamentals with Phitron');
   });
 });

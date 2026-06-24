@@ -142,7 +142,7 @@ export function buildAskPrompt(input: {
   kb: { title: string; body: string; moderatorAnswer?: string | null }[];
   coreInfo?: string;
   docs: { slug: string; value: string }[];
-  docCatalog?: string[];
+  docCatalog?: { slug: string; summary?: string }[];
   replyLanguage?: 'en' | 'bn' | 'original';
 }): string {
   const kbBlock = input.kb.length
@@ -154,15 +154,17 @@ export function buildAskPrompt(input: {
   const docsBlock = input.docs.length
     ? input.docs.map((d) => `[doc:${d.slug}]\n${d.value}`).join('\n\n')
     : null;
-  // Always advertise every available knowledge doc + retrieved KB title so the
-  // model can answer catalog questions ("what do you know / what docs exist")
-  // even when retrieval only pulled a subset of their content.
-  const catalogNames = [
-    ...(input.docCatalog ?? input.docs.map((d) => d.slug)),
+  // Always advertise every available knowledge doc (with a one-line summary) + the
+  // retrieved KB titles so the model can answer catalog questions ("what do you
+  // know / what docs exist") even when retrieval pulled only a subset of content.
+  const catalog: { slug: string; summary?: string }[] =
+    input.docCatalog ?? input.docs.map((d) => ({ slug: d.slug }));
+  const catalogEntries = [
+    ...catalog.map((d) => (d.summary ? `${d.slug} — ${d.summary}` : d.slug)),
     ...input.kb.map((e) => e.title),
   ];
-  const catalogBlock = catalogNames.length
-    ? `Available internal sources (titles only):\n${[...new Set(catalogNames)].map((n) => `- ${n}`).join('\n')}`
+  const catalogBlock = catalogEntries.length
+    ? `Available internal sources:\n${[...new Set(catalogEntries)].map((n) => `- ${n}`).join('\n')}`
     : null;
   const internal =
     [catalogBlock, kbBlock, coreBlock, docsBlock].filter(Boolean).join('\n\n') || '(no internal context)';

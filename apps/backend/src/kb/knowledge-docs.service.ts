@@ -74,6 +74,23 @@ export class KnowledgeDocsService {
       .filter((r) => (r.similarity ?? 0) >= SIMILARITY_THRESHOLD);
   }
 
+  // Slugs that have at least one embedded chunk. Lets the retriever tell which
+  // docs are reachable by vector search vs. which need a text-rank fallback so a
+  // stale/un-embedded doc is never silently invisible. One cheap query.
+  async embeddedSlugs(): Promise<string[]> {
+    try {
+      const rows = await this.prisma.$queryRaw<{ docSlug: string }[]>`
+        SELECT DISTINCT doc_slug AS "docSlug"
+        FROM knowledge_doc_chunks
+        WHERE embedding IS NOT NULL
+      `;
+      return rows.map((r) => r.docSlug);
+    } catch {
+      // chunks table missing (pre-migration) / pgvector down — treat as none embedded.
+      return [];
+    }
+  }
+
   // Derive embed status by comparing the stored content hash to the live doc.
   // Tolerant: if the chunks table is missing (migration not yet run) treat as
   // 'none' rather than failing the whole config listing.
