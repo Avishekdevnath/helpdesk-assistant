@@ -124,6 +124,15 @@ describe('ask', () => {
   // (gpt-4o-mini) echoes the latest question so retrieval keeps the real query.
   let composeResult: { choices: [{ message: Record<string, unknown> }] };
   let webResult: { choices: [{ message: Record<string, unknown> }] };
+  // Text the streaming compose (gpt-4o stream:true) emits, one chunk per token.
+  let composeStreamText: string;
+
+  async function* streamChunks(text: string) {
+    for (const piece of text.match(/\S+\s*|\s+/g) ?? []) {
+      yield { choices: [{ delta: { content: piece } }] };
+    }
+    yield { choices: [{ delta: {} }], usage: { total_tokens: 5 } };
+  }
 
   const reply = (content: unknown, extra: Record<string, unknown> = {}) => ({
     choices: [{ message: { content, ...extra } }] as [{ message: Record<string, unknown> }],
@@ -145,6 +154,7 @@ describe('ask', () => {
     knowledgeDocs.searchDocs.mockResolvedValue([]);
     composeResult = reply('answer');
     webResult = reply('web answer');
+    composeStreamText = 'streamed answer';
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
@@ -158,6 +168,7 @@ describe('ask', () => {
     service = moduleRef.get(AiService);
     chatCreate = jest.fn().mockImplementation((args: any) => {
       if (args.model === 'gpt-4o-mini-search-preview') return Promise.resolve(webResult);
+      if (args.model === 'gpt-4o' && args.stream) return Promise.resolve(streamChunks(composeStreamText));
       if (args.model === 'gpt-4o') return Promise.resolve(composeResult);
       return Promise.resolve(echoRefine(args)); // gpt-4o-mini refine/condense
     });
@@ -347,5 +358,33 @@ describe('ask', () => {
 
     const userMsg = composeCall().messages.find((m: any) => m.role === 'user').content;
     expect(userMsg).toContain('cs-fundamentals — CSE Fundamentals with Phitron');
+  });
+
+  it('askStream emits grounded tokens then done', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'Refunds', body: 'No refund after 7 days.' }]);
+    composeStreamText = 'No refund after 7 days.';
+
+    const events: any[] = [];
+    await service.askStream({ messages: [{ role: 'user', content: 'refund?' }] }, (e) => events.push(e));
+
+    const text = events.filter((e) => e.type === 'token').map((e) => e.text).join('');
+    expect(text).toBe('No refund after 7 days.');
+    expect(events.at(-1)).toMatchObject({ type: 'done', usedWeb: false });
+    expect(events.some((e) => e.type === 'stage' && e.stage === 'answering')).toBe(true);
+  });
+
+  it('askStream suppresses the sentinel and falls back to web when KB empty', async () => {
+    kb.search.mockResolvedValue([]);
+    composeStreamText = NO_ANSWER_SENTINEL; // model gives up on internal context
+    webResult = reply('From the web', { annotations: [] });
+
+    const events: any[] = [];
+    await service.askStream({ messages: [{ role: 'user', content: 'weather today?' }] }, (e) => events.push(e));
+
+    const text = events.filter((e) => e.type === 'token').map((e) => e.text).join('');
+    expect(text).not.toContain(NO_ANSWER_SENTINEL);
+    expect(text).toBe('From the web');
+    expect(events.some((e) => e.type === 'stage' && e.stage === 'searching_web')).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'done', usedWeb: true });
   });
 });

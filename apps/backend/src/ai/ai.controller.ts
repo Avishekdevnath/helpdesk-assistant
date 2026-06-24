@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Res } from '@nestjs/common';
+import { Body, Controller, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
+import type { AskStreamEvent } from '@helpdesk/shared-types';
 import { AiService } from './ai.service';
 import { GenerateReplyDto } from './dto/generate-reply.dto';
 import { AskRequestDto } from './dto/ask.dto';
@@ -18,22 +19,22 @@ export class AiController {
     return this.ai.ask(dto);
   }
 
-  // TRANSPORT PROBE — emits 5 SSE chunks 600ms apart. If a client sees them
-  // arrive incrementally, Vercel streams this handler and real SSE for /ask is
-  // viable; if all 5 land at once after ~3s, the platform buffers (pivot needed).
-  // Remove after the streaming decision is made.
-  @Get('stream-probe')
-  async streamProbe(@Res() res: Response) {
+  // Streaming Ask over SSE. Verified to stream (not buffer) on Vercel. Each event
+  // is one `data: <json AskStreamEvent>` line; the stream ends after `done`/`error`.
+  @Post('ask/stream')
+  async askStream(@Body() dto: AskRequestDto, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     (res as any).flushHeaders?.();
-    for (let i = 1; i <= 5; i++) {
-      res.write(`data: ${JSON.stringify({ i, t: Date.now() })}\n\n`);
+
+    const send = (event: AskStreamEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
       (res as any).flush?.();
-      await new Promise((r) => setTimeout(r, 600));
-    }
+    };
+
+    await this.ai.askStream(dto, send);
     res.write('data: [DONE]\n\n');
     res.end();
   }

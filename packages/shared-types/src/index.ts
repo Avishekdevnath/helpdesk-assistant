@@ -68,3 +68,10 @@ export interface AskResponse {
   usedWeb: boolean;
   sources: AskSources;
 }
+
+// Server-sent events emitted by POST /ai/ask/stream, one JSON object per SSE line.
+export type AskStreamEvent =
+  | { type: 'stage'; stage: 'answering' | 'searching_web' }
+  | { type: 'token'; text: string }
+  | { type: 'done'; usedWeb: boolean; sources: AskSources }
+  | { type: 'error'; message: string };

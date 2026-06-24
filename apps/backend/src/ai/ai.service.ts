@@ -2,7 +2,7 @@ import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import OpenAI from 'openai';
-import type { GenerateReplyResponse, AskRequest, AskResponse } from '@helpdesk/shared-types';
+import type { GenerateReplyResponse, AskRequest, AskResponse, AskStreamEvent } from '@helpdesk/shared-types';
 import { AppConfigService } from '../app-config/app-config.service';
 import { KbService } from '../kb/kb.service';
 import { KnowledgeDocsService } from '../kb/knowledge-docs.service';
@@ -54,6 +54,21 @@ const PROMPT_DEFAULTS: Record<string, string> = {
 };
 
 const DOCS_CHAR_CAP = 12000;
+
+// Token-usage meter: passes a completion through untouched while accumulating cost.
+type Meter = <T extends { usage?: { total_tokens?: number } | null }>(res: T) => T;
+
+// Everything gather() produces — the shared retrieval context for both ask paths.
+interface AskContext {
+  messages: AskRequest['messages'];
+  latest: string;
+  query: string;
+  kbHits: { id: string; title: string; body: string; moderatorAnswer?: string | null; similarity?: number }[];
+  coreInfo: string | null;
+  docs: { slug: string; value: string }[];
+  docCatalog: { slug: string; summary?: string }[];
+  baseSources: AskResponse['sources'];
+}
 
 // One-line summary for the catalog block: the doc's first heading (usually its
 // title), else its first real line. Lets the model say what each doc covers.
@@ -275,23 +290,13 @@ export class AiService implements OnModuleInit {
     return [...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') }));
   }
 
-  async ask(req: AskRequest): Promise<AskResponse> {
-    const startedAt = Date.now();
-    const trace = randomUUID().slice(0, 8);
-    let tokens = 0;
-    // Accumulate token usage across the refine/compose/web calls for cost logging.
-    const meter = <T extends { usage?: { total_tokens?: number } | null }>(res: T): T => {
-      tokens += res?.usage?.total_tokens ?? 0;
-      return res;
-    };
-
+  // Refine the query then retrieve all internal sources. Shared by ask() and
+  // askStream() so the retrieval contract stays single-source.
+  private async gather(req: AskRequest, meter: Meter): Promise<AskContext> {
     const messages = req.messages ?? [];
-    const last = [...messages].reverse().find((m) => m.role === 'user');
-    const latest = last?.content ?? '';
+    const latest = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
 
-    // 1. Refine the query: fix typos and (for multi-turn) condense history into a
-    //    standalone retrieval question. Runs even for a single message so a
-    //    misspelled first question still retrieves correctly.
+    // Refine: fix typos and (multi-turn) condense history into a standalone query.
     let query = latest;
     if (latest.trim()) {
       const condensed = meter(
@@ -304,7 +309,6 @@ export class AiService implements OnModuleInit {
       query = condensed.choices?.[0]?.message?.content?.trim() || latest;
     }
 
-    // 2. Retrieve internal sources in parallel.
     const [kbHits, coreInfo, docRows] = await Promise.all([
       this.kb.search(query, 6),
       this.appConfig.get('core_info'),
@@ -315,103 +319,217 @@ export class AiService implements OnModuleInit {
       slug: r.key.replace('knowledge:', ''),
       summary: docSummary(r.value),
     }));
-
     const baseSources = {
       kb: kbHits.map((h) => ({ id: h.id, title: h.title })),
       docs: docs.map((d) => d.slug),
       usedCoreInfo: !!(coreInfo && coreInfo.trim()),
       web: [] as { title: string; url: string }[],
     };
+    return { messages, latest, query, kbHits, coreInfo: coreInfo ?? null, docs, docCatalog, baseSources };
+  }
 
-    // One structured log line per ask — path taken, retrieval shape, latency, cost.
-    const finish = (path: 'grounded' | 'web' | 'refusal', res: AskResponse): AskResponse => {
-      this.logger.log(
-        JSON.stringify({
-          evt: 'ask',
-          trace,
-          path,
-          ms: Date.now() - startedAt,
-          tokens,
-          qChars: latest.length,
-          kbHits: kbHits.length,
-          kbTopSim: kbHits[0]?.similarity ?? null,
-          docs: docs.length,
-          usedCore: baseSources.usedCoreInfo,
-          lang: req.replyLanguage ?? 'en',
+  private composeMessages(req: AskRequest, ctx: AskContext) {
+    return [
+      { role: 'system' as const, content: buildAskSystem(req.replyLanguage) },
+      {
+        role: 'user' as const,
+        content: buildAskPrompt({
+          query: ctx.query,
+          history: ctx.messages,
+          kb: ctx.kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
+          coreInfo: ctx.coreInfo || undefined,
+          docs: ctx.docs,
+          docCatalog: ctx.docCatalog,
+          replyLanguage: req.replyLanguage,
         }),
-      );
+      },
+    ];
+  }
+
+  private webMessages(req: AskRequest, ctx: AskContext) {
+    return [
+      { role: 'system' as const, content: ASK_WEB_SYSTEM },
+      {
+        role: 'user' as const,
+        content: buildAskPrompt({
+          query: ctx.query,
+          history: ctx.messages,
+          kb: [],
+          coreInfo: ctx.coreInfo || undefined,
+          docs: ctx.docs,
+          docCatalog: ctx.docCatalog,
+          replyLanguage: req.replyLanguage,
+        }),
+      },
+    ];
+  }
+
+  private extractWebCitations(msg: any): { title: string; url: string }[] {
+    return (msg?.annotations ?? [])
+      .filter((a: any) => a.type === 'url_citation' && a.url_citation)
+      .map((a: any) => ({ title: a.url_citation.title ?? a.url_citation.url, url: a.url_citation.url }));
+  }
+
+  private logAsk(
+    path: 'grounded' | 'web' | 'refusal',
+    meta: { trace: string; startedAt: number; tokens: number; ctx: AskContext; lang?: string; stream?: boolean },
+  ) {
+    const { ctx } = meta;
+    this.logger.log(
+      JSON.stringify({
+        evt: 'ask',
+        ...(meta.stream ? { stream: true } : {}),
+        trace: meta.trace,
+        path,
+        ms: Date.now() - meta.startedAt,
+        tokens: meta.tokens,
+        qChars: ctx.latest.length,
+        kbHits: ctx.kbHits.length,
+        kbTopSim: ctx.kbHits[0]?.similarity ?? null,
+        docs: ctx.docs.length,
+        usedCore: ctx.baseSources.usedCoreInfo,
+        lang: meta.lang ?? 'en',
+      }),
+    );
+  }
+
+  async ask(req: AskRequest): Promise<AskResponse> {
+    const startedAt = Date.now();
+    const trace = randomUUID().slice(0, 8);
+    let tokens = 0;
+    const meter: Meter = (res) => {
+      tokens += res?.usage?.total_tokens ?? 0;
       return res;
     };
 
-    // 3. Compose a grounded answer from internal context FIRST. The model answers
-    //    content questions and catalog questions ("what docs do you have") from the
-    //    Available-internal-sources block, or returns NO_ANSWER_SENTINEL when the
-    //    context genuinely cannot answer.
+    const ctx = await this.gather(req, meter);
+    const log = (path: 'grounded' | 'web' | 'refusal') =>
+      this.logAsk(path, { trace, startedAt, tokens, ctx, lang: req.replyLanguage });
+
+    // Compose a grounded answer from internal context FIRST (catalog + content),
+    // or NO_ANSWER_SENTINEL when the context genuinely cannot answer.
     const compose = meter(
       await this.client.chat.completions.create({
         model: 'gpt-4o',
         max_tokens: 1024,
-        messages: [
-          { role: 'system', content: buildAskSystem(req.replyLanguage) },
-          {
-            role: 'user',
-            content: buildAskPrompt({
-              query,
-              history: messages,
-              kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
-              coreInfo: coreInfo || undefined,
-              docs,
-              docCatalog,
-              replyLanguage: req.replyLanguage,
-            }),
-          },
-        ],
+        messages: this.composeMessages(req, ctx),
       }),
     );
     const grounded = compose.choices?.[0]?.message?.content?.trim() ?? '';
-    const internalAnswered = grounded !== '' && !grounded.includes(NO_ANSWER_SENTINEL);
-
-    // 4. Internal context answered — return it, no web leak.
-    if (internalAnswered) {
-      return finish('grounded', { answer: grounded, usedWeb: false, sources: baseSources });
+    if (grounded !== '' && !grounded.includes(NO_ANSWER_SENTINEL)) {
+      log('grounded');
+      return { answer: grounded, usedWeb: false, sources: ctx.baseSources };
     }
 
-    // 5. Internal context could not answer AND KB found nothing — try the web as a
-    //    last resort. (If KB had hits we trust the grounded refusal and skip web.)
-    if (kbHits.length === 0) {
+    // Internal could not answer AND KB empty — web fallback. (KB hits ⇒ trust refusal.)
+    if (ctx.kbHits.length === 0) {
       const webRes = meter(
         await this.client.chat.completions.create({
           model: 'gpt-4o-mini-search-preview',
           web_search_options: {},
-          messages: [
-            { role: 'system', content: ASK_WEB_SYSTEM },
-            {
-              role: 'user',
-              content: buildAskPrompt({
-                query,
-                history: messages,
-                kb: [],
-                coreInfo: coreInfo || undefined,
-                docs,
-                docCatalog,
-                replyLanguage: req.replyLanguage,
-              }),
-            },
-          ],
+          messages: this.webMessages(req, ctx),
         } as any),
       );
       const msg = webRes.choices?.[0]?.message as any;
-      const web = (msg?.annotations ?? [])
-        .filter((a: any) => a.type === 'url_citation' && a.url_citation)
-        .map((a: any) => ({ title: a.url_citation.title ?? a.url_citation.url, url: a.url_citation.url }));
-      return finish('web', {
+      log('web');
+      return {
         answer: msg?.content ?? refusalText(req.replyLanguage),
         usedWeb: true,
-        sources: { ...baseSources, web },
-      });
+        sources: { ...ctx.baseSources, web: this.extractWebCitations(msg) },
+      };
     }
 
-    // 6. No internal answer, KB had hits but none sufficed — localized refusal.
-    return finish('refusal', { answer: refusalText(req.replyLanguage), usedWeb: false, sources: baseSources });
+    log('refusal');
+    return { answer: refusalText(req.replyLanguage), usedWeb: false, sources: ctx.baseSources };
+  }
+
+  // Streaming variant: same flow as ask() but emits SSE events. Grounded compose
+  // tokens stream live, guarded so NO_ANSWER_SENTINEL never leaks to the client —
+  // if the model emits it, we suppress and fall through to web/refusal.
+  async askStream(req: AskRequest, emit: (e: AskStreamEvent) => void): Promise<void> {
+    const startedAt = Date.now();
+    const trace = randomUUID().slice(0, 8);
+    let tokens = 0;
+    const meter: Meter = (res) => {
+      tokens += res?.usage?.total_tokens ?? 0;
+      return res;
+    };
+
+    try {
+      const ctx = await this.gather(req, meter);
+      const log = (path: 'grounded' | 'web' | 'refusal') =>
+        this.logAsk(path, { trace, startedAt, tokens, ctx, lang: req.replyLanguage, stream: true });
+
+      emit({ type: 'stage', stage: 'answering' });
+      const stream = await this.client.chat.completions.create({
+        model: 'gpt-4o',
+        max_tokens: 1024,
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: this.composeMessages(req, ctx),
+      });
+
+      let grounded = '';
+      let flushed = 0;
+      let decided = false; // true once we know the output is a real answer (not the sentinel)
+      let isSentinel = false;
+      for await (const chunk of stream) {
+        const usage = (chunk as any).usage;
+        if (usage) tokens += usage.total_tokens ?? 0;
+        const delta = chunk.choices?.[0]?.delta?.content ?? '';
+        if (!delta) continue;
+        grounded += delta;
+
+        if (!decided && !isSentinel) {
+          const trimmed = grounded.trimStart();
+          if (trimmed.length < NO_ANSWER_SENTINEL.length) {
+            if (NO_ANSWER_SENTINEL.startsWith(trimmed)) continue; // still ambiguous — hold tokens
+            decided = true;
+          } else if (trimmed.startsWith(NO_ANSWER_SENTINEL)) {
+            isSentinel = true; // it's the refusal sentinel — never emit, branch after loop
+            continue;
+          } else {
+            decided = true;
+          }
+        }
+        if (isSentinel) continue;
+        const tail = grounded.slice(flushed);
+        if (tail) {
+          emit({ type: 'token', text: tail });
+          flushed = grounded.length;
+        }
+      }
+
+      const internalAnswered = !isSentinel && grounded.trim() !== '' && !grounded.includes(NO_ANSWER_SENTINEL);
+      if (internalAnswered) {
+        emit({ type: 'done', usedWeb: false, sources: ctx.baseSources });
+        log('grounded');
+        return;
+      }
+
+      if (ctx.kbHits.length === 0) {
+        emit({ type: 'stage', stage: 'searching_web' });
+        const webRes = meter(
+          await this.client.chat.completions.create({
+            model: 'gpt-4o-mini-search-preview',
+            web_search_options: {},
+            messages: this.webMessages(req, ctx),
+          } as any),
+        );
+        const msg = webRes.choices?.[0]?.message as any;
+        const answer = msg?.content ?? refusalText(req.replyLanguage);
+        emit({ type: 'token', text: answer });
+        emit({ type: 'done', usedWeb: true, sources: { ...ctx.baseSources, web: this.extractWebCitations(msg) } });
+        log('web');
+        return;
+      }
+
+      emit({ type: 'token', text: refusalText(req.replyLanguage) });
+      emit({ type: 'done', usedWeb: false, sources: ctx.baseSources });
+      log('refusal');
+    } catch (e) {
+      this.logger.error(`askStream failed: ${e instanceof Error ? e.message : String(e)}`);
+      emit({ type: 'error', message: 'Ask failed. Please try again.' });
+    }
   }
 }
