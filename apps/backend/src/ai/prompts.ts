@@ -112,7 +112,7 @@ export function buildAskSystem(replyLanguage?: 'en' | 'bn' | 'original'): string
     '- Never guess, infer, or fill gaps. Do not generalise from a job title or a name into a course or feature.',
     `- If the context does not contain the answer, reply with exactly this token and nothing else: ${NO_ANSWER_SENTINEL}`,
     '- EXCEPTION — catalog questions: if asked what you know, what topics/documents/knowledge you have, or to list your sources, answer by listing the titles in the "Available internal sources" block. This is allowed even though it is not a content fact.',
-    '- When you do answer, cite the sources you used by their title or [doc:slug].',
+    '- FORMATTING: write a clean, direct answer. Do NOT print raw citation markers such as [doc:slug], [doc:...], or bracketed source tags — the interface shows the sources separately. Do NOT prefix the answer with a language name (e.g. "বাংলায়:" / "In English:").',
   ].join('\n');
 }
 
