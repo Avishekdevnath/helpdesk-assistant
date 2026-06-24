@@ -1,4 +1,12 @@
-import { buildPrompt, decideMode, buildCondensePrompt, buildAskPrompt, buildAskSystem } from './prompts';
+import {
+  buildPrompt,
+  decideMode,
+  buildCondensePrompt,
+  buildAskPrompt,
+  buildAskSystem,
+  NO_ANSWER_SENTINEL,
+  refusalText,
+} from './prompts';
 
 describe('AI prompts', () => {
   it('uses full_answer when no question hits exist', () => {
@@ -108,10 +116,15 @@ describe('buildAskPrompt', () => {
     expect(out.toLowerCase()).toContain('only the internal context');
   });
 
-  it('system prompt forbids prior knowledge and sets a refusal string', () => {
+  it('system prompt forbids prior knowledge and emits the no-answer sentinel', () => {
     const sys = buildAskSystem('en');
     expect(sys.toLowerCase()).toContain('no prior knowledge');
-    expect(sys).toContain('Not confirmed in internal sources.');
+    expect(sys).toContain(NO_ANSWER_SENTINEL);
+  });
+
+  it('refusalText is localized', () => {
+    expect(refusalText('en')).toBe('Not confirmed in internal sources.');
+    expect(refusalText('bn')).not.toBe(refusalText('en'));
   });
 
   it('says no internal context when nothing retrieved', () => {

@@ -5,6 +5,7 @@ import { KbService } from '../kb/kb.service';
 import { KnowledgeDocsService } from '../kb/knowledge-docs.service';
 import { QuestionsService } from '../questions/questions.service';
 import { AppConfigService } from '../app-config/app-config.service';
+import { NO_ANSWER_SENTINEL } from './prompts';
 
 describe('AiService', () => {
   const kb = { search: jest.fn() };
@@ -118,12 +119,31 @@ describe('ask', () => {
 
   let service: AiService;
   let chatCreate: jest.Mock;
+  // Configurable per-test results for the two answer paths. The refine call
+  // (gpt-4o-mini) echoes the latest question so retrieval keeps the real query.
+  let composeResult: { choices: [{ message: Record<string, unknown> }] };
+  let webResult: { choices: [{ message: Record<string, unknown> }] };
+
+  const reply = (content: unknown, extra: Record<string, unknown> = {}) => ({
+    choices: [{ message: { content, ...extra } }] as [{ message: Record<string, unknown> }],
+  });
+
+  // Echo the last "Moderator:" line from a condense/refine prompt — simulates a
+  // typo-corrected query that, in these tests, equals the original question.
+  const echoRefine = (args: any) => {
+    const text: string = args.messages[0].content;
+    const lines = text.split('\n').filter((l) => l.startsWith('Moderator:'));
+    const last = lines.length ? lines[lines.length - 1].replace('Moderator: ', '') : '';
+    return reply(last);
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     appConfig.get.mockResolvedValue('');
     appConfig.listByPrefix.mockResolvedValue([]);
     knowledgeDocs.searchDocs.mockResolvedValue([]);
+    composeResult = reply('answer');
+    webResult = reply('web answer');
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
@@ -135,50 +155,88 @@ describe('ask', () => {
       ],
     }).compile();
     service = moduleRef.get(AiService);
-    chatCreate = jest.fn().mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+    chatCreate = jest.fn().mockImplementation((args: any) => {
+      if (args.model === 'gpt-4o-mini-search-preview') return Promise.resolve(webResult);
+      if (args.model === 'gpt-4o') return Promise.resolve(composeResult);
+      return Promise.resolve(echoRefine(args)); // gpt-4o-mini refine/condense
+    });
     (service as unknown as { client: unknown }).client = {
       chat: { completions: { create: chatCreate } },
     };
   });
 
+  // The grounded compose call (gpt-4o) — the one carrying internal context.
+  const composeCall = () =>
+    chatCreate.mock.calls.find((c) => c[0].model === 'gpt-4o')?.[0];
+
   it('answers from internal KB without web when KB has hits', async () => {
     kb.search.mockResolvedValue([{ id: 'k1', title: 'Refunds', body: 'No refund after 7 days.' }]);
-    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'No refund after 7 days.' } }] });
+    composeResult = reply('No refund after 7 days.');
 
     const res = await service.ask({ messages: [{ role: 'user', content: 'refund policy?' }] });
 
     expect(res.usedWeb).toBe(false);
     expect(res.answer).toBe('No refund after 7 days.');
     expect(res.sources.kb).toEqual([{ id: 'k1', title: 'Refunds' }]);
-    expect(chatCreate).toHaveBeenCalledTimes(1);
+    // grounded compose used, no web model
     expect(chatCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o' }));
+    expect(chatCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-mini-search-preview' }),
+    );
   });
 
-  it('falls back to web search when KB has zero hits', async () => {
+  it('falls back to web search when KB is empty and internal context cannot answer', async () => {
     kb.search.mockResolvedValue([]);
-    chatCreate.mockResolvedValue({
-      choices: [{
-        message: {
-          content: 'According to the web, ...',
-          annotations: [{ type: 'url_citation', url_citation: { url: 'https://x.test', title: 'X' } }],
-        },
-      }],
+    composeResult = reply(NO_ANSWER_SENTINEL); // grounded path gives up
+    webResult = reply('According to the web, ...', {
+      annotations: [{ type: 'url_citation', url_citation: { url: 'https://x.test', title: 'X' } }],
     });
 
     const res = await service.ask({ messages: [{ role: 'user', content: 'obscure thing?' }] });
 
     expect(res.usedWeb).toBe(true);
+    expect(res.answer).toBe('According to the web, ...');
     expect(res.sources.web).toEqual([{ title: 'X', url: 'https://x.test' }]);
     expect(chatCreate).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'gpt-4o-mini-search-preview', web_search_options: {} }),
     );
   });
 
-  it('condenses multi-turn history before retrieval', async () => {
+  it('does NOT leak to web for catalog questions when docs exist (KB empty)', async () => {
+    kb.search.mockResolvedValue([]);
+    appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:policies', value: 'Refund window 7 days.' }]);
+    composeResult = reply('We have: policies'); // grounded answers from the catalog block
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'what docs do you have?' }] });
+
+    expect(res.usedWeb).toBe(false);
+    expect(res.answer).toBe('We have: policies');
+    expect(chatCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-mini-search-preview' }),
+    );
+    // catalog of all docs surfaced to the grounded model
+    expect(composeCall().messages.find((m: any) => m.role === 'user').content).toContain('policies');
+  });
+
+  it('returns localized refusal (no web) when KB had hits but none sufficed', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    composeResult = reply(NO_ANSWER_SENTINEL);
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'unanswerable?' }] });
+
+    expect(res.usedWeb).toBe(false);
+    expect(res.answer).toBe('Not confirmed in internal sources.');
+    expect(chatCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-mini-search-preview' }),
+    );
+  });
+
+  it('refines/condenses multi-turn history before retrieval', async () => {
     kb.search.mockResolvedValue([{ id: 'k1', title: 'Exam', body: 'June 30.' }]);
-    chatCreate
-      .mockResolvedValueOnce({ choices: [{ message: { content: 'When is the C exam for batch 2026?' } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: 'June 30.' } }] });
+    chatCreate.mockImplementation((args: any) => {
+      if (args.model === 'gpt-4o') return Promise.resolve(reply('June 30.'));
+      return Promise.resolve(reply('When is the C exam for batch 2026?')); // refine
+    });
 
     await service.ask({
       messages: [
@@ -189,14 +247,24 @@ describe('ask', () => {
     });
 
     expect(kb.search).toHaveBeenCalledWith('When is the C exam for batch 2026?', 6);
-    expect(chatCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('refines a single misspelled question before retrieval', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'Docs', body: 'b' }]);
+    chatCreate.mockImplementation((args: any) => {
+      if (args.model === 'gpt-4o') return Promise.resolve(reply('answer'));
+      return Promise.resolve(reply('what knowledge docs do you have')); // typo-corrected
+    });
+
+    await service.ask({ messages: [{ role: 'user', content: 'what knowledge cocs has?' }] });
+
+    expect(kb.search).toHaveBeenCalledWith('what knowledge docs do you have', 6);
   });
 
   it('marks usedCoreInfo and includes doc slugs in sources', async () => {
     kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
     appConfig.get.mockImplementation((k: string) => Promise.resolve(k === 'core_info' ? 'org facts' : ''));
     appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:policies', value: 'Refund window 7 days.' }]);
-    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
 
     const res = await service.ask({ messages: [{ role: 'user', content: 'refund?' }] });
 
@@ -214,11 +282,10 @@ describe('ask', () => {
       '## Contact\n' + 'y'.repeat(12000),
     ].join('\n');
     appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:cs-fundamentals', value: bigDoc }]);
-    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
 
     await service.ask({ messages: [{ role: 'user', content: 'how long is the course duration?' }] });
 
-    const userMsg = chatCreate.mock.calls[0][0].messages.find((m: any) => m.role === 'user').content;
+    const userMsg = composeCall().messages.find((m: any) => m.role === 'user').content;
     expect(userMsg).toContain('10-12 months');
     expect(userMsg).toContain('[doc:cs-fundamentals]');
   });
@@ -228,12 +295,11 @@ describe('ask', () => {
     knowledgeDocs.searchDocs.mockResolvedValue([
       { slug: 'cs-fundamentals', content: 'The course takes 10-12 months.', similarity: 0.7 },
     ]);
-    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
 
     const res = await service.ask({ messages: [{ role: 'user', content: 'how long is the course?' }] });
 
     expect(res.sources.docs).toEqual(['cs-fundamentals']);
-    const userMsg = chatCreate.mock.calls[0][0].messages.find((m: any) => m.role === 'user').content;
+    const userMsg = composeCall().messages.find((m: any) => m.role === 'user').content;
     expect(userMsg).toContain('10-12 months');
     expect(userMsg).toContain('[doc:cs-fundamentals]');
     // text fallback (listByPrefix) not consulted when vector hits exist
@@ -244,7 +310,6 @@ describe('ask', () => {
     kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
     knowledgeDocs.searchDocs.mockResolvedValue([]);
     appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:policies', value: 'Refund window 7 days.' }]);
-    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
 
     const res = await service.ask({ messages: [{ role: 'user', content: 'refund?' }] });
 

@@ -110,10 +110,21 @@ export function buildAskSystem(replyLanguage?: 'en' | 'bn' | 'original'): string
     '- Use ONLY the facts in the "Internal context" provided in the user message.',
     '- You have NO prior knowledge. Ignore anything you may know about Phitron, its courses, fees, schedule, location, or staff. If a fact (fee, duration, dates, office hours, location, syllabus) is not written in the context, you do NOT know it.',
     '- Never guess, infer, or fill gaps. Do not generalise from a job title or a name into a course or feature.',
-    '- If the context does not contain the answer, reply with exactly: "Not confirmed in internal sources." and nothing else (translated to the answer language).',
+    `- If the context does not contain the answer, reply with exactly this token and nothing else: ${NO_ANSWER_SENTINEL}`,
     '- EXCEPTION — catalog questions: if asked what you know, what topics/documents/knowledge you have, or to list your sources, answer by listing the titles in the "Available internal sources" block. This is allowed even though it is not a content fact.',
     '- When you do answer, cite the sources you used by their title or [doc:slug].',
   ].join('\n');
+}
+
+// Untranslated sentinel the grounded model returns when internal context cannot
+// answer. The service detects it to decide web fallback vs. a localized refusal.
+export const NO_ANSWER_SENTINEL = '__NO_INTERNAL_ANSWER__';
+
+// Localized user-facing refusal shown when neither internal context nor web can
+// answer (or web is not attempted).
+export function refusalText(replyLanguage?: 'en' | 'bn' | 'original'): string {
+  if (replyLanguage === 'bn') return 'অভ্যন্তরীণ উৎসে নিশ্চিত করা যায়নি।';
+  return 'Not confirmed in internal sources.';
 }
 
 // System prompt for the web-search fallback path (used only when KB is empty).

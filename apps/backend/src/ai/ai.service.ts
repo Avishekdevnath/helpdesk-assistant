@@ -14,6 +14,8 @@ import {
   buildAskPrompt,
   buildAskSystem,
   ASK_WEB_SYSTEM,
+  NO_ANSWER_SENTINEL,
+  refusalText,
   buildCondensePrompt,
   decideMode,
   DEFAULT_IDENTITY,
@@ -268,7 +270,39 @@ export class AiService implements OnModuleInit {
       web: [] as { title: string; url: string }[],
     };
 
-    // 3. Web fallback ONLY when KB has zero hits.
+    // 3. Compose a grounded answer from internal context FIRST. The model answers
+    //    content questions and catalog questions ("what docs do you have") from the
+    //    Available-internal-sources block, or returns NO_ANSWER_SENTINEL when the
+    //    context genuinely cannot answer.
+    const compose = await this.client.chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: buildAskSystem(req.replyLanguage) },
+        {
+          role: 'user',
+          content: buildAskPrompt({
+            query,
+            history: messages,
+            kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
+            coreInfo: coreInfo || undefined,
+            docs,
+            docCatalog,
+            replyLanguage: req.replyLanguage,
+          }),
+        },
+      ],
+    });
+    const grounded = compose.choices?.[0]?.message?.content?.trim() ?? '';
+    const internalAnswered = grounded !== '' && !grounded.includes(NO_ANSWER_SENTINEL);
+
+    // 4. Internal context answered — return it, no web leak.
+    if (internalAnswered) {
+      return { answer: grounded, usedWeb: false, sources: baseSources };
+    }
+
+    // 5. Internal context could not answer AND KB found nothing — try the web as a
+    //    last resort. (If KB had hits we trust the grounded refusal and skip web.)
     if (kbHits.length === 0) {
       const webRes = await this.client.chat.completions.create({
         model: 'gpt-4o-mini-search-preview',
@@ -294,37 +328,13 @@ export class AiService implements OnModuleInit {
         .filter((a: any) => a.type === 'url_citation' && a.url_citation)
         .map((a: any) => ({ title: a.url_citation.title ?? a.url_citation.url, url: a.url_citation.url }));
       return {
-        answer: msg?.content ?? 'No information found.',
+        answer: msg?.content ?? refusalText(req.replyLanguage),
         usedWeb: true,
         sources: { ...baseSources, web },
       };
     }
 
-    // 4. Compose grounded answer from internal context.
-    const compose = await this.client.chat.completions.create({
-      model: 'gpt-4o',
-      max_tokens: 1024,
-      messages: [
-        { role: 'system', content: buildAskSystem(req.replyLanguage) },
-        {
-          role: 'user',
-          content: buildAskPrompt({
-            query,
-            history: messages,
-            kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
-            coreInfo: coreInfo || undefined,
-            docs,
-            docCatalog,
-            replyLanguage: req.replyLanguage,
-          }),
-        },
-      ],
-    });
-
-    return {
-      answer: compose.choices?.[0]?.message?.content ?? 'No information found.',
-      usedWeb: false,
-      sources: baseSources,
-    };
+    // 6. No internal answer, KB had hits but none sufficed — localized refusal.
+    return { answer: refusalText(req.replyLanguage), usedWeb: false, sources: baseSources };
   }
 }
