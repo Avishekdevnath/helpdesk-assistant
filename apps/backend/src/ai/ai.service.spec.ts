@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { AiService } from './ai.service';
 import { KbService } from '../kb/kb.service';
+import { KnowledgeDocsService } from '../kb/knowledge-docs.service';
 import { QuestionsService } from '../questions/questions.service';
 import { AppConfigService } from '../app-config/app-config.service';
 
@@ -9,6 +10,7 @@ describe('AiService', () => {
   const kb = { search: jest.fn() };
   const questions = { search: jest.fn(), searchForPost: jest.fn() };
   const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
+  const knowledgeDocs = { searchDocs: jest.fn() };
   const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
 
   let service: AiService;
@@ -18,12 +20,14 @@ describe('AiService', () => {
     jest.clearAllMocks();
     appConfig.get.mockResolvedValue('');
     appConfig.listByPrefix.mockResolvedValue([]);
+    knowledgeDocs.searchDocs.mockResolvedValue([]);
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
         { provide: KbService, useValue: kb },
         { provide: QuestionsService, useValue: questions },
         { provide: AppConfigService, useValue: appConfig },
+        { provide: KnowledgeDocsService, useValue: knowledgeDocs },
         { provide: ConfigService, useValue: config },
       ],
     }).compile();
@@ -109,6 +113,7 @@ describe('ask', () => {
   const kb = { search: jest.fn(), searchForPost: jest.fn() };
   const questions = { search: jest.fn(), searchForPost: jest.fn() };
   const appConfig = { get: jest.fn(), listByPrefix: jest.fn() };
+  const knowledgeDocs = { searchDocs: jest.fn() };
   const config = { get: (key: string) => (key === 'OPENAI_API_KEY' ? 'sk-test' : undefined) };
 
   let service: AiService;
@@ -118,12 +123,14 @@ describe('ask', () => {
     jest.clearAllMocks();
     appConfig.get.mockResolvedValue('');
     appConfig.listByPrefix.mockResolvedValue([]);
+    knowledgeDocs.searchDocs.mockResolvedValue([]);
     const moduleRef = await Test.createTestingModule({
       providers: [
         AiService,
         { provide: KbService, useValue: kb },
         { provide: QuestionsService, useValue: questions },
         { provide: AppConfigService, useValue: appConfig },
+        { provide: KnowledgeDocsService, useValue: knowledgeDocs },
         { provide: ConfigService, useValue: config },
       ],
     }).compile();
@@ -214,5 +221,33 @@ describe('ask', () => {
     const userMsg = chatCreate.mock.calls[0][0].messages.find((m: any) => m.role === 'user').content;
     expect(userMsg).toContain('10-12 months');
     expect(userMsg).toContain('[doc:cs-fundamentals]');
+  });
+
+  it('uses vector doc search results as docs when chunks are embedded', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    knowledgeDocs.searchDocs.mockResolvedValue([
+      { slug: 'cs-fundamentals', content: 'The course takes 10-12 months.', similarity: 0.7 },
+    ]);
+    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'how long is the course?' }] });
+
+    expect(res.sources.docs).toEqual(['cs-fundamentals']);
+    const userMsg = chatCreate.mock.calls[0][0].messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).toContain('10-12 months');
+    expect(userMsg).toContain('[doc:cs-fundamentals]');
+    // text fallback (listByPrefix) not consulted when vector hits exist
+    expect(appConfig.listByPrefix).toHaveBeenCalled(); // still fetched in parallel, but not used for ranking
+  });
+
+  it('falls back to text ranking when vector doc search returns nothing', async () => {
+    kb.search.mockResolvedValue([{ id: 'k1', title: 'T', body: 'b' }]);
+    knowledgeDocs.searchDocs.mockResolvedValue([]);
+    appConfig.listByPrefix.mockResolvedValue([{ key: 'knowledge:policies', value: 'Refund window 7 days.' }]);
+    chatCreate.mockResolvedValue({ choices: [{ message: { content: 'answer' } }] });
+
+    const res = await service.ask({ messages: [{ role: 'user', content: 'refund?' }] });
+
+    expect(res.sources.docs).toEqual(['policies']);
   });
 });

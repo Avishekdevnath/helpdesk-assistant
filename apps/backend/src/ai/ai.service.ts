@@ -4,8 +4,10 @@ import OpenAI from 'openai';
 import type { GenerateReplyResponse, AskRequest, AskResponse } from '@helpdesk/shared-types';
 import { AppConfigService } from '../app-config/app-config.service';
 import { KbService } from '../kb/kb.service';
+import { KnowledgeDocsService } from '../kb/knowledge-docs.service';
 import { QuestionsService } from '../questions/questions.service';
 import { GenerateReplyDto } from './dto/generate-reply.dto';
+import { chunkDoc } from './chunk.util';
 import {
   buildPrompt,
   buildRefinePrompt,
@@ -58,6 +60,7 @@ export class AiService implements OnModuleInit {
     private readonly kb: KbService,
     private readonly questions: QuestionsService,
     private readonly appConfig: AppConfigService,
+    private readonly knowledgeDocs: KnowledgeDocsService,
     config: ConfigService,
   ) {
     const apiKey = config.get<string>('OPENAI_API_KEY');
@@ -158,14 +161,36 @@ export class AiService implements OnModuleInit {
     };
   }
 
-  // Split a knowledge doc into section-sized chunks (by markdown heading or
-  // Q/A block) so a large doc can be partially retrieved instead of dropped.
-  private chunkDoc(value: string): string[] {
-    const parts = value
-      .split(/\n(?=#{1,4}\s|\*\*Q[:.]?|\bQ:)/)
-      .map((p) => p.trim())
-      .filter(Boolean);
-    return parts.length ? parts : [value];
+  // Retrieve knowledge docs by vector top-k over their embedded chunks. Falls
+  // back to text ranking over the raw docs when nothing is embedded yet (or
+  // pgvector is unavailable), so un-embedded docs are never invisible.
+  private async retrieveDocs(
+    query: string,
+    docRows: { key: string; value: string }[],
+  ): Promise<{ slug: string; value: string }[]> {
+    try {
+      const hits = await this.knowledgeDocs.searchDocs(query, 6);
+      if (hits.length) {
+        const bySlug = new Map<string, string[]>();
+        let used = 0;
+        for (const h of hits) {
+          if (used >= DOCS_CHAR_CAP) break;
+          const slice = h.content.slice(0, DOCS_CHAR_CAP - used);
+          if (!slice) break;
+          const arr = bySlug.get(h.slug) ?? [];
+          arr.push(slice);
+          bySlug.set(h.slug, arr);
+          used += slice.length;
+        }
+        return [...bySlug].map(([slug, parts]) => ({ slug, value: parts.join('\n\n') }));
+      }
+    } catch {
+      // pgvector unavailable — fall through to text ranking.
+    }
+    return this.rankDocs(
+      docRows.map((r) => ({ slug: r.key.replace('knowledge:', ''), value: r.value })),
+      query,
+    );
   }
 
   private rankDocs(
@@ -184,7 +209,7 @@ export class AiService implements OnModuleInit {
     // Rank every chunk across all docs, then fill the budget with the most
     // relevant chunks — truncating the final chunk to fit rather than skipping.
     const chunks = docs
-      .flatMap((d) => this.chunkDoc(d.value).map((text) => ({ slug: d.slug, text })))
+      .flatMap((d) => chunkDoc(d.value).map((text) => ({ slug: d.slug, text })))
       .map((c) => ({ ...c, score: scoreOf(c.text) }))
       .sort((a, b) => b.score - a.score);
 
@@ -231,10 +256,7 @@ export class AiService implements OnModuleInit {
       this.appConfig.get('core_info'),
       this.appConfig.listByPrefix('knowledge:'),
     ]);
-    const docs = this.rankDocs(
-      docRows.map((r) => ({ slug: r.key.replace('knowledge:', ''), value: r.value })),
-      query,
-    );
+    const docs = await this.retrieveDocs(query, docRows);
 
     const baseSources = {
       kb: kbHits.map((h) => ({ id: h.id, title: h.title })),

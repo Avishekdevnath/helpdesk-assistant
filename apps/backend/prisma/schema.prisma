@@ -105,3 +105,17 @@ model Config {
 
   @@map("configs")
 }
+
+model KnowledgeDocChunk {
+  id          String   @id @default(cuid())
+  docSlug     String   @map("doc_slug")
+  chunkIndex  Int      @map("chunk_index")
+  content     String   @db.Text
+  embedding   Unsupported("vector(1536)")?
+  contentHash String   @map("content_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([docSlug, chunkIndex])
+  @@index([docSlug])
+  @@map("knowledge_doc_chunks")
+}
