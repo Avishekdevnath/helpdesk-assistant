@@ -15,6 +15,7 @@ import {
   buildAskPrompt,
   buildAskSystem,
   ASK_WEB_SYSTEM,
+  VISION_DESCRIBE_PROMPT,
   NO_ANSWER_SENTINEL,
   refusalText,
   buildCondensePrompt,
@@ -68,6 +69,7 @@ interface AskContext {
   docs: { slug: string; value: string }[];
   docCatalog: { slug: string; summary?: string }[];
   baseSources: AskResponse['sources'];
+  images: string[];
 }
 
 // One-line summary for the catalog block: the doc's first heading (usually its
@@ -295,8 +297,10 @@ export class AiService implements OnModuleInit {
   private async gather(req: AskRequest, meter: Meter): Promise<AskContext> {
     const messages = req.messages ?? [];
     const latest = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const images = (req.images ?? []).filter((s) => typeof s === 'string' && s.startsWith('data:image'));
 
-    // Refine: fix typos and (multi-turn) condense history into a standalone query.
+    // Build the retrieval query. With text: refine (typo-fix + multi-turn condense).
+    // Image-only: vision-describe the image into a search query so retrieval works.
     let query = latest;
     if (latest.trim()) {
       const condensed = meter(
@@ -307,6 +311,23 @@ export class AiService implements OnModuleInit {
         }),
       );
       query = condensed.choices?.[0]?.message?.content?.trim() || latest;
+    } else if (images.length) {
+      const described = meter(
+        await this.client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          max_tokens: 128,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: VISION_DESCRIBE_PROMPT },
+                ...images.slice(0, 2).map((url) => ({ type: 'image_url' as const, image_url: { url } })),
+              ],
+            },
+          ],
+        } as any),
+      );
+      query = described.choices?.[0]?.message?.content?.trim() || '';
     }
 
     const [kbHits, coreInfo, docRows] = await Promise.all([
@@ -325,24 +346,29 @@ export class AiService implements OnModuleInit {
       usedCoreInfo: !!(coreInfo && coreInfo.trim()),
       web: [] as { title: string; url: string }[],
     };
-    return { messages, latest, query, kbHits, coreInfo: coreInfo ?? null, docs, docCatalog, baseSources };
+    return { messages, latest, query, kbHits, coreInfo: coreInfo ?? null, docs, docCatalog, baseSources, images };
   }
 
-  private composeMessages(req: AskRequest, ctx: AskContext) {
+  private composeMessages(req: AskRequest, ctx: AskContext): any[] {
+    const userText = buildAskPrompt({
+      query: ctx.query,
+      history: ctx.messages,
+      kb: ctx.kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
+      coreInfo: ctx.coreInfo || undefined,
+      docs: ctx.docs,
+      docCatalog: ctx.docCatalog,
+      replyLanguage: req.replyLanguage,
+    });
+    // Attach images (vision) to the user turn when present, else plain text content.
+    const userContent = ctx.images.length
+      ? [
+          { type: 'text', text: userText },
+          ...ctx.images.map((url) => ({ type: 'image_url', image_url: { url, detail: 'auto' } })),
+        ]
+      : userText;
     return [
-      { role: 'system' as const, content: buildAskSystem(req.replyLanguage) },
-      {
-        role: 'user' as const,
-        content: buildAskPrompt({
-          query: ctx.query,
-          history: ctx.messages,
-          kb: ctx.kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
-          coreInfo: ctx.coreInfo || undefined,
-          docs: ctx.docs,
-          docCatalog: ctx.docCatalog,
-          replyLanguage: req.replyLanguage,
-        }),
-      },
+      { role: 'system', content: buildAskSystem(req.replyLanguage) },
+      { role: 'user', content: userContent },
     ];
   }
 

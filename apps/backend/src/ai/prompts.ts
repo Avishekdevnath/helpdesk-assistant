@@ -113,6 +113,7 @@ export function buildAskSystem(replyLanguage?: 'en' | 'bn' | 'original'): string
     `- If the context does not contain the answer, reply with exactly this token and nothing else: ${NO_ANSWER_SENTINEL}`,
     '- EXCEPTION — catalog questions: if asked what you know, what topics/documents/knowledge you have, or to list your sources, answer by listing the titles in the "Available internal sources" block. This is allowed even though it is not a content fact.',
     '- FORMATTING: write a clean, direct answer. Do NOT print raw citation markers such as [doc:slug], [doc:...], or bracketed source tags — the interface shows the sources separately. Do NOT prefix the answer with a language name (e.g. "বাংলায়:" / "In English:").',
+    '- CONTACT: whenever you tell someone to email or contact Phitron for any reason, always include the email address support@phitron.io.',
   ].join('\n');
 }
 
@@ -126,6 +127,11 @@ export function refusalText(replyLanguage?: 'en' | 'bn' | 'original'): string {
   if (replyLanguage === 'bn') return 'অভ্যন্তরীণ উৎসে নিশ্চিত করা যায়নি।';
   return 'Not confirmed in internal sources.';
 }
+
+// Turns an image-only question into a text search query so KB/doc retrieval works.
+export const VISION_DESCRIBE_PROMPT =
+  'Look at the attached image and write a short search query (keywords) describing what the ' +
+  'user is likely asking about, to find relevant help-desk knowledge. Return only the query text.';
 
 // System prompt for the web-search fallback path (used only when KB is empty).
 export const ASK_WEB_SYSTEM = [

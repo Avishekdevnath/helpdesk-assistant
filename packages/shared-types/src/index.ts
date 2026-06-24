@@ -54,6 +54,8 @@ export interface AskMessage {
 export interface AskRequest {
   messages: AskMessage[];
   replyLanguage?: 'en' | 'bn' | 'original';
+  // Ephemeral image attachments (data URLs) for the latest user turn — vision input.
+  images?: string[];
 }
 
 export interface AskSources {
