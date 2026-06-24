@@ -239,9 +239,11 @@ export class AiService implements OnModuleInit {
     const last = [...messages].reverse().find((m) => m.role === 'user');
     const latest = last?.content ?? '';
 
-    // 1. Condense multi-turn history into a standalone retrieval query.
+    // 1. Refine the query: fix typos and (for multi-turn) condense history into a
+    //    standalone retrieval question. Runs even for a single message so a
+    //    misspelled first question still retrieves correctly.
     let query = latest;
-    if (messages.length > 1) {
+    if (latest.trim()) {
       const condensed = await this.client.chat.completions.create({
         model: 'gpt-4o-mini',
         max_tokens: 128,
@@ -257,6 +259,7 @@ export class AiService implements OnModuleInit {
       this.appConfig.listByPrefix('knowledge:'),
     ]);
     const docs = await this.retrieveDocs(query, docRows);
+    const docCatalog = docRows.map((r) => r.key.replace('knowledge:', ''));
 
     const baseSources = {
       kb: kbHits.map((h) => ({ id: h.id, title: h.title })),
@@ -280,6 +283,7 @@ export class AiService implements OnModuleInit {
               kb: [],
               coreInfo: coreInfo || undefined,
               docs,
+              docCatalog,
               replyLanguage: req.replyLanguage,
             }),
           },
@@ -310,6 +314,7 @@ export class AiService implements OnModuleInit {
             kb: kbHits.map((h) => ({ title: h.title, body: h.body, moderatorAnswer: h.moderatorAnswer })),
             coreInfo: coreInfo || undefined,
             docs,
+            docCatalog,
             replyLanguage: req.replyLanguage,
           }),
         },

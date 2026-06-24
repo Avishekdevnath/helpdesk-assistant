@@ -84,7 +84,9 @@ export function buildCondensePrompt(
   return [
     'Given the conversation below, rewrite the LAST moderator message into a single',
     'standalone search question that captures any context from earlier turns.',
-    'Return ONLY the rewritten question, nothing else.',
+    'Fix spelling mistakes and obvious typos (e.g. "knowledge cocs" -> "knowledge docs",',
+    '"codeforce" -> "codeforces"). Keep the original intent and language — do NOT answer,',
+    'translate, or add information. Return ONLY the rewritten question, nothing else.',
     '',
     history,
   ].join('\n');
@@ -109,6 +111,7 @@ export function buildAskSystem(replyLanguage?: 'en' | 'bn' | 'original'): string
     '- You have NO prior knowledge. Ignore anything you may know about Phitron, its courses, fees, schedule, location, or staff. If a fact (fee, duration, dates, office hours, location, syllabus) is not written in the context, you do NOT know it.',
     '- Never guess, infer, or fill gaps. Do not generalise from a job title or a name into a course or feature.',
     '- If the context does not contain the answer, reply with exactly: "Not confirmed in internal sources." and nothing else (translated to the answer language).',
+    '- EXCEPTION — catalog questions: if asked what you know, what topics/documents/knowledge you have, or to list your sources, answer by listing the titles in the "Available internal sources" block. This is allowed even though it is not a content fact.',
     '- When you do answer, cite the sources you used by their title or [doc:slug].',
   ].join('\n');
 }
@@ -128,6 +131,7 @@ export function buildAskPrompt(input: {
   kb: { title: string; body: string; moderatorAnswer?: string | null }[];
   coreInfo?: string;
   docs: { slug: string; value: string }[];
+  docCatalog?: string[];
   replyLanguage?: 'en' | 'bn' | 'original';
 }): string {
   const kbBlock = input.kb.length
@@ -139,7 +143,18 @@ export function buildAskPrompt(input: {
   const docsBlock = input.docs.length
     ? input.docs.map((d) => `[doc:${d.slug}]\n${d.value}`).join('\n\n')
     : null;
-  const internal = [kbBlock, coreBlock, docsBlock].filter(Boolean).join('\n\n') || '(no internal context)';
+  // Always advertise every available knowledge doc + retrieved KB title so the
+  // model can answer catalog questions ("what do you know / what docs exist")
+  // even when retrieval only pulled a subset of their content.
+  const catalogNames = [
+    ...(input.docCatalog ?? input.docs.map((d) => d.slug)),
+    ...input.kb.map((e) => e.title),
+  ];
+  const catalogBlock = catalogNames.length
+    ? `Available internal sources (titles only):\n${[...new Set(catalogNames)].map((n) => `- ${n}`).join('\n')}`
+    : null;
+  const internal =
+    [catalogBlock, kbBlock, coreBlock, docsBlock].filter(Boolean).join('\n\n') || '(no internal context)';
 
   const history = input.history
     .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'Moderator'}: ${m.content}`)
